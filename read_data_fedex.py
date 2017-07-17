@@ -6,16 +6,28 @@ import time
 import math
 from scipy.sparse.coo import coo_matrix
 
-PATH_TO_DATA = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/dynamics/demand_models/fedex.data"
+PATH_TO_DATA = "/Users/Louis/PycharmProjects/policy_approximation/DATA/fedex_pc_cleaned_no_0.data"
 PATH_TO_ADDRESSES = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/gym_foo/envs/addresses.fedex"
+PATH_TO_POSTAL_CODE = "/Users/Louis/PycharmProjects/policy_approximation/DATA/postal_codes_fedex"
 
 
-class Dataset:
+def postal_code_to_ID(postal_code):
+    """
+    Return the index (i.e. the ID) of postal_code
+    :param postal_code:
+    :return:
+    """
+    with open(PATH_TO_POSTAL_CODE, "rb") as f:
+        pcodes = pickle.load(f)
+
+    return pcodes.index(postal_code)  # index == ID !, unique if postal_codes.fedex correctly generated!
+
+class Datasets:
     """
     Will allow to access, prepare fedex data in order to be fed into a neural net
     """
 
-    def __init__(self, path):
+    def __init__(self, path, mode):
 
         self.path = path
         self.dataframe = pd.read_csv(
@@ -45,16 +57,19 @@ class Dataset:
 
         indices, values, dense_shape, indices_label, values_label = self.get_sparse_rpz_loc(
             [1, len(self.start_tour_idx) - 1],
-            column="address",  # "postal_code" is not supported yet
+            column=mode,  # "postal_code" is not supported yet
             cur_loc_code=1,
             rem_deliv_code=0.5,
-            rem_pickup_code=-0.25
+            rem_pickup_code=-0.5
         )
 
         indices = np.asarray(indices)
         rows = indices[:, 0]
+        print("max rows indices ", max(rows))
         columns = indices[:, 1]
-        sparse_entries = coo_matrix((values, (rows, columns)), shape=dense_shape)
+        print("max columns indices ", max(columns))
+        sparse_entries = coo_matrix((values, (rows, columns)))
+        print("sparse_entries shape ", sparse_entries.shape)
         # input data
         self.entries = np.asarray(sparse_entries.todense(), dtype=np.float16)
 
@@ -117,17 +132,9 @@ class Dataset:
         Return the 3 components to build a sparse matrix described as follows:
         matrix of type [nb of training examples, nb of features]
 
-        as well as to build a sparse matrix of labels
-
-        [ self.nb_entries * self.nb_addresses ] if features="addresses" AND cur_loc = False
-        [ self.nb_entries * self.nb_postal_code ] if features="postal_code" AND cur_loc = False
-
-        [ self.nb_entries * (self.nb_addresses + 1)] if features="addresses" AND cur_loc = True
-        [ self.nb_entries * (self.nb_postal_code + 1)] if features="postal_code" AND cur_loc = True
-
         :param range_tour: list, number of operation tours retrieved (1 tour = 1 truck operating)
             column: str, retrieve locations by Addresses or Postal Codes
-            *_code: float, score assigned in the generalized one-hot encoding
+            *_code: floats, score assigned in the generalized one-hot encoding
 
         :return: indices, values, dense_shape
         """
@@ -139,8 +146,14 @@ class Dataset:
         indices_label = []
         values_label = []
 
-        array_line = 0
+        # encode postal codes
+        with open(PATH_TO_POSTAL_CODE, "rb") as f:
+            pcodes = pickle.load(f)  # pcodes[int] gives the postal code encoded by int
 
+        post_code_to_int = dict((c, i) for c, i in zip(pcodes, range(0, len(pcodes))))
+
+        array_line = 0
+        print("Start retrieving sparse values")
         for start, end in itertools.zip_longest(
                 self.start_tour_idx[range_tour[0]-1:range_tour[1]],
                 self.start_tour_idx[range_tour[0]:range_tour[1]+1],
@@ -153,14 +166,17 @@ class Dataset:
             # print('end', end)
 
             if end != 0:
+                # TODO: for RNN, we need to keep record of the end of each delivery tour, because training
+                # TODO will be done by tours!
                 for step in range(end - start - 1):
-                    # cur loc
-                    cur_loc = self.addresses_id_col[start + step]
-                    # print("loc ",cur_loc)
-                    # ...
-                    # print("CUR LOC ", cur_loc)
-
                     if column == "address":
+                        # cur loc
+                        cur_loc = self.addresses_id_col[start + step]
+                        # print("loc ",cur_loc)
+                        # ...
+                        # print("CUR LOC ", cur_loc)
+
+
                         # remaining deliveries
                         rem_deliv = list(self.get_rem_deliv([start + step + 1, end])["Address"])
                         # print("rem_deliv ", rem_deliv)
@@ -179,8 +195,24 @@ class Dataset:
                         values.extend([rem_pickup_code] * len(rem_pick))
                         values.extend([cur_loc_code])
 
+                        # label
+                        next_loc = self.addresses_id_col[start + step + 1]
+
+                        indices_label.extend([[array_line, next_loc]])
+
+                        values_label.extend([1])
+                        array_line += 1
+                        # print("LABEL ", next_loc)
+
                     elif column == "postal_code":
-                        # TODO ENCODE postal codes !! mapping from each postal code to an int (\in [1, ~16 000]
+                        # cur loc
+                        cur_loc = self.postal_code_col[start + step]
+                        cur_loc = post_code_to_int[cur_loc]
+                        # print("loc ",cur_loc)
+                        # ...
+                        # print("CUR LOC ", cur_loc)
+
+
                         # remaining deliveries
                         rem_deliv = list(self.get_rem_deliv([start + step + 1, end])["PostalCode"])
                         # print("rem_deliv ", rem_deliv)
@@ -188,24 +220,32 @@ class Dataset:
                         # remaining pickups => maybe use POSTAL CODE instead
                         rem_pick = list(self.get_rem_pickup([start + step + 1, end])["PostalCode"])
 
+                        # TODO ENCODE postal codes !! mapping from each postal code to an int (\in [1, ~16 000]
+                        # TODO rem_pick and rem_deliv => encoded to their respective IDs
+                        # translation
+                        rem_deliv_id = [post_code_to_int[int(i)] for i in rem_deliv]
+                        rem_pick_id = [post_code_to_int[int(i)] for i in rem_pick]
+
                         # add successively delivery, pickup, current location
                         # adapted to the SparseTensor requirements
-                        indices.extend([[array_line, i] for i in rem_deliv])
-                        indices.extend([[array_line, i] for i in rem_pick])
+                        indices.extend([[array_line, int(i)] for i in rem_deliv_id])
+                        indices.extend([[array_line, int(i)] for i in rem_pick_id])
                         indices.extend([[array_line, cur_loc]])
 
-                        values.extend([rem_deliv_code] * len(rem_deliv))
-                        values.extend([rem_pickup_code] * len(rem_pick))
+                        values.extend([rem_deliv_code] * len(rem_deliv_id))
+                        values.extend([rem_pickup_code] * len(rem_pick_id))
                         values.extend([cur_loc_code])
 
-                    # label
-                    next_loc = self.addresses_id_col[start + step + 1]
+                        # label
+                        next_loc = self.postal_code_col[start + step + 1]
+                        next_loc = post_code_to_int[next_loc]  # /!\ Encoding /!\
 
-                    indices_label.extend([[array_line, next_loc]])
+                        indices_label.extend([[array_line, next_loc]])
 
-                    values_label.extend([1])
-                    array_line += 1
-                    # print("LABEL ", next_loc)
+                        values_label.extend([1])
+                        array_line += 1
+                        # print("LABEL ", next_loc)
+
 
         if column == "address":
             dense_shape = [indices[-1][0]+1, self.nb_addresses]
@@ -240,7 +280,7 @@ class ReadDataFedex:
         print("____________________________________________________________________________")
         print(" ")
         print(" DATA LOADING...")
-        loaded = np.load('dataset.fedex.npz')
+        loaded = np.load('DATA/dataset_pc.fedex.npz')  # dataset_addresses.fedex.npz
         self.entries = loaded['inputs']
         self.labels = loaded['labels']
 
@@ -255,168 +295,96 @@ class ReadDataFedex:
         print("____________________________________________________________________________")
 
 
-class TrainAndTest(ReadDataFedex):
+class Dataset:
 
-    def __init__(self, percentage=0.7):
+    def __init__(self, entries, labels):
         """
 
         :param percentage: percentage, float. Proportion of dataset used for training
         """
 
         # to follow training
-        self.index_in_epoch_train = 0
-        self.epochs_completed_train = 0
-
-        self.index_in_epoch_test = 0
-        self.epochs_completed_test = 0
-
-        self.percentage = percentage
-
-        # Root dataset
-        self.root_data = ReadDataFedex()
+        self.index_in_epoch = 0
+        self.epochs_completed = 0
 
         # TRAINING DATASET
-        length = self.root_data.entries.shape[0]
-        self.entries_train = self.root_data.entries[:math.floor(percentage*length), :]
-        self.labels_train = self.root_data.labels[:math.floor(percentage*length)]
+        self.entries = entries
+        self.labels = labels
 
-        self.num_examples_train = self.entries_train.shape[0]
-        # self.num_features_train = self.entries_train.shape[1]
+        self.num_examples = entries.shape[0]
+        self.num_features = entries.shape[1]
 
-        # TESTING DATASET
-        self.entries_test = self.root_data.entries[math.floor(percentage*length):, :]
-        self.labels_test = self.root_data.labels[math.floor(percentage*length):]
+    # TODO: this is the feeding technique. Other are possible (queues with list of files)
+    # TODO: we will have to include an option for RNN training (train using meaningful sequences of examples
+    def next_batch(self, batch_size, shuffle=True):
+        """Return the next `batch_size` examples from entries and labels.
 
-        self.num_examples_test = self.entries_test.shape[0]
+        :param batch_size, int.
+        :param shuffle, bool. shuffle the next batch
 
-    def next_batch(self, batch_size, task="train_eval", shuffle=True):
-        # TODO Cette imple est degeulasse avec ce mot cles "task" qui double le code, a reprendre a la sauce Google
-        # TODO il n'y a pas que ca. pleins de choses a revoir...
-        """Return the next `batch_size` examples from our TRAINING data set contained in self.entries_sparse_param.
-
-        :param task, str. say if the function has to give a batch of training "train_eval" or testing "test_eval"
+        :return tuple, np.array entries AND np.array labels
         """
-        if task == "train_eval":
-            start_ = self.index_in_epoch_train
+        start_ = self.index_in_epoch
 
-            # Shuffle for the first epoch
+        # Shuffle for the first epoch
 
-            if self.epochs_completed_train == 0 and start_ == 0 and shuffle:
-                perm0 = np.arange(self.num_examples_train)
-                np.random.shuffle(perm0)
-                # TODO self.entries ici?
-                self.entries = self.entries_train[perm0, :]
-                self.labels = self.labels_train[perm0]
+        if self.epochs_completed == 0 and start_ == 0 and shuffle:
+            perm0 = np.arange(self.num_examples)
+            np.random.shuffle(perm0)
+            self.entries = self.entries[perm0, :]
+            self.labels = self.labels[perm0]
 
-            # Go to the next epoch
-            if start_ + batch_size > self.num_examples_train:
-                # Finished epoch
-                self.epochs_completed_train += 1
-                # Get the rest examples in this epoch
-                rest_num_examples = self.num_examples_train - start_
-                entries_rest_part = self.entries_train[start_:self.num_examples_train, :]
-                labels_rest_part = self.labels_train[start_:self.num_examples_train]
-                # Shuffle the data
-                if shuffle:
-                    perm = np.arange(self.num_examples_train)
-                    np.random.shuffle(perm)
-                    self.entries_train = self.entries_train[perm, :]
-                    self.labels_train = self.labels_train[perm]
-                # Start next epoch
-                start_ = 0
-                self.index_in_epoch_train = batch_size - rest_num_examples
-                end = self.index_in_epoch_train
-                entries_new_part = self.entries_train[start_:end, :]
-                labels_new_part = self.labels_train[start_:end]
-                result = np.concatenate((entries_rest_part, entries_new_part), axis=0), np.concatenate(
-                    (labels_rest_part, labels_new_part), axis=0)
+        # Go to the next epoch
+        if start_ + batch_size > self.num_examples:
+            # Finished epoch
+            self.epochs_completed += 1
+            # Get the rest examples in this epoch
+            rest_num_examples = self.num_examples - start_
+            entries_rest_part = self.entries[start_:self.num_examples, :]
+            labels_rest_part = self.labels[start_:self.num_examples]
+            # Shuffle the data
+            if shuffle:
+                perm = np.arange(self.num_examples)
+                np.random.shuffle(perm)
+                self.entries = self.entries[perm, :]
+                self.labels = self.labels[perm]
+            # Start next epoch
+            start_ = 0
+            self.index_in_epoch = batch_size - rest_num_examples
+            end = self.index_in_epoch
+            entries_new_part = self.entries[start_:end, :]
+            labels_new_part = self.labels[start_:end]
+            result = np.concatenate((entries_rest_part, entries_new_part),
+                                    axis=0),\
+                     np.concatenate((labels_rest_part, labels_new_part),
+                                    axis=0)
+            return result
 
-                return result
-
-            else:
-                self.index_in_epoch_train += batch_size
-                end = self.index_in_epoch_train
-                return self.entries_train[start_:end, :], self.labels_train[start_:end]
-
-        elif task == "test_eval":
-            start_ = self.index_in_epoch_test
-
-            # Shuffle for the first epoch
-
-            if self.epochs_completed_test == 0 and start_ == 0 and shuffle:
-                perm0 = np.arange(self.num_examples_test)
-                np.random.shuffle(perm0)
-                self.entries = self.entries_test[perm0, :]
-                self.labels = self.labels_test[perm0]
-
-            # Go to the next epoch
-            if start_ + batch_size > self.num_examples_test:
-                # Finished epoch
-                self.epochs_completed_test += 1
-                # Get the rest examples in this epoch
-                rest_num_examples = self.num_examples_test - start_
-                entries_rest_part = self.entries_test[start_:self.num_examples_test, :]
-                labels_rest_part = self.labels_test[start_:self.num_examples_test]
-                # Shuffle the data
-                if shuffle:
-                    perm = np.arange(self.num_examples_test)
-                    np.random.shuffle(perm)
-                    self.entries_test = self.entries_test[perm, :]
-                    self.labels_test = self.labels_test[perm]
-                # Start next epoch
-                start_ = 0
-                self.index_in_epoch_test = batch_size - rest_num_examples
-                end = self.index_in_epoch_test
-                entries_new_part = self.entries_test[start_:end, :]
-                labels_new_part = self.labels_test[start_:end]
-                result = np.concatenate((entries_rest_part, entries_new_part), axis=0), np.concatenate(
-                    (labels_rest_part, labels_new_part), axis=0)
-
-                return result
-
-            else:
-                self.index_in_epoch_test += batch_size
-                end = self.index_in_epoch_test
-                return self.entries_test[start_:end, :], self.labels_test[start_:end]
-
+        else:
+            self.index_in_epoch += batch_size
+            end = self.index_in_epoch
+            return self.entries[start_:end, :], self.labels[start_:end]
 
 
 if __name__ == "__main__":
 
     # this is looong
-    fedex = Dataset(PATH_TO_DATA)
-    np.savez_compressed("dataset.fedex", inputs=fedex.entries, labels=fedex.labels)
+    fedex = Datasets(PATH_TO_DATA, mode='postal_code')
+    np.savez_compressed("dataset_pc.fedex", inputs=fedex.entries, labels=fedex.labels)
+
     """
-    start = time.time()
-    data = TrainAndTest(0.1)
-    print("all data shape |", data.root_data.num_examples)
-    print("train shape    |", data.num_examples_train)
-    end = time.time()
+    raw_data = pd.read_csv(
+        PATH_TO_DATA,
+        header=0,
+        delim_whitespace=True
+    )
 
-    print("Elapsed time ", end - start)
+    postal_codes = list(sorted(set(list(raw_data["PostalCode"]))))
+    print(max(raw_data["PostalCode"]))
 
-    # Small size test
+    with open(PATH_TO_POSTAL_CODE, 'rb') as f:
+        pcodes = pickle.load(f)
 
-    print("list of start ", fedex.start_tour_idx)
-    print("address with 0 as ID? ", fedex.dataframe[fedex.dataframe["Address"] == 0])
-    start = time.time()
-    ids, vls, ds_s, ids_l, vls_l = fedex.get_sparse_rpz_loc([1,3-1], "address")
-    end = time.time()
-
-    print("Time elapsed: ", end - start)
-
-    indices = np.asarray(ids)
-    rows = indices[:, 0]
-    columns = indices[:, 1]
-
-    indices_l = np.asarray(ids_l)
-    rows_l = indices_l[:, 0]
-    columns_l = indices_l[:, 1]
-    print("rows shape ", rows)
-    print("columns shape ", columns)
-    print("values shape", len(vls))
-    print("shape ", ds_s)
-    sparse_entries = coo_matrix((vls_l, (rows_l, columns_l)), shape=ds_s)
-    print(sparse_entries.shape)
-    entries = np.asarray(sparse_entries.todense())
+        print(len(pcodes))
     """
+

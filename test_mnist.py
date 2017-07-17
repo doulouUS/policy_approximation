@@ -37,7 +37,7 @@ import tensorflow as tf
 FLAGS = None
 
 # Load data
-NUM_CLASSES = 46521
+NUM_CLASSES = 16077 # 46521
 ENTRIES_FEAT = NUM_CLASSES  #  input are of the same shape as output
 
 # ----------------------------------------------------------------------
@@ -175,7 +175,7 @@ def placeholder_inputs(batch_size):
     return entries_placeholder, labels_placeholder
 
 
-def fill_feed_dict(data_set, entries_pl, labels_pl, task):
+def fill_feed_dict(data_set, entries_pl, labels_pl):
     # TODO are you sure of dataset's type?
     """Fills the feed_dict for training the given step.
     A feed_dict takes the form of:
@@ -184,16 +184,15 @@ def fill_feed_dict(data_set, entries_pl, labels_pl, task):
       ....
     }
     Args:
-    data_set: TrainAndTest() object
+    data_set: Dataset() object
     entries_pl: The entries placeholder, from placeholder_inputs().
     labels_pl: The labels placeholder, from placeholder_inputs().
-    task: say if function must provide train set "train_eval" or test set "test_eval"
     Returns:
     feed_dict: The feed dictionary mapping from placeholders to values.
     """
     # Create the feed_dict for the placeholders filled with the next
     # `batch size` examples.
-    entries_feed, labels_feed = data_set.next_batch(FLAGS.batch_size, task)
+    entries_feed, labels_feed = data_set.next_batch(FLAGS.batch_size)
     feed_dict = {
       entries_pl: entries_feed,
       labels_pl: labels_feed,
@@ -205,8 +204,8 @@ def do_eval(sess,
             eval_correct,
             entries_placeholder,
             labels_placeholder,
-            data_set,
-            task="eval_train"):
+            data_set
+            ):
     """Runs one evaluation against the full epoch of data.
     Args:
     sess: The session in which the model has been trained.
@@ -214,8 +213,8 @@ def do_eval(sess,
     entries_placeholder: The entries placeholder.
     labels_placeholder: The labels placeholder.
     data_set: The set of entries and labels to evaluate, from
-      TrainAndTest().
-    task: String, say if the function is used for training/validation "train_eval" or testing "test_eval"
+      Dataset().
+
     """
     # And run one epoch of eval.
     true_count = 0  # Counts the number of correct predictions.
@@ -225,8 +224,7 @@ def do_eval(sess,
     for step in range(steps_per_epoch):
         feed_dict = fill_feed_dict(data_set,
                                    entries_placeholder,
-                                   labels_placeholder,
-                                   task
+                                   labels_placeholder
                                    )
         true_count += sess.run(eval_correct, feed_dict=feed_dict)
     precision = float(true_count) / num_examples
@@ -238,7 +236,19 @@ def run_training():
     """Train MNIST for a number of steps."""
     # TODO data_sets should provide either training or testing set !
     # Get the sets of entries and labels for training and Test
-    data_sets = rdf.TrainAndTest(FLAGS.percentage_train)
+    whole_data = rdf.ReadDataFedex()
+    percentage_training = 0.7
+    num_examples = whole_data.num_examples
+
+    # Train and test data
+    train_entries = whole_data.entries[:math.floor(percentage_training*num_examples)]
+    train_labels = whole_data.labels[:math.floor(percentage_training*num_examples)]
+
+    test_entries = whole_data.entries[math.floor(percentage_training*num_examples):]
+    test_labels = whole_data.labels[math.floor(percentage_training * num_examples):]
+
+    data_set_train = rdf.Dataset(train_entries, train_labels)
+    data_set_test = rdf.Dataset(test_entries, test_labels)
 
     # Tell TensorFlow that the model will be built into the default Graph.
 
@@ -294,10 +304,10 @@ def run_training():
 
             # Fill a feed dictionary with the actual set of entries and labels
             # for this particular training step.
-            feed_dict = fill_feed_dict(data_sets,
+            feed_dict = fill_feed_dict(data_set_train,
                                        entries_placeholder,
-                                       labels_placeholder,
-                                       task="train_eval")
+                                       labels_placeholder
+                                       )
 
             # Run one step of the model.  The return values are the activations
             # from the `train_op` (which is discarded) and the `loss` Op.  To
@@ -312,9 +322,9 @@ def run_training():
 
             # Write the summaries and print an overview fairly often.
             # TODO is it too often with 10?
-            if step % 5000 == 0:
+            if step % 50 == 0:
                 # Print status to stdout.
-                print('Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
+                print('-- Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
                 # Update the events file.
                 summary_str = sess.run(summary, feed_dict=feed_dict)
                 summary_writer.add_summary(summary_str, step)
@@ -334,28 +344,16 @@ def run_training():
                         eval_correct,
                         entries_placeholder,
                         labels_placeholder,
-                        data_sets,
-                        task="train_eval")
-                # TODO check again that data_sets is correct type lah!
+                        data_set_train)
                 # TODO no validation set yet
-                """
-                # Evaluate against the validation set.
-                print('Validation Data Eval:')
-                do_eval(sess,
-                        eval_correct,
-                        entries_placeholder,
-                        labels_placeholder,
-                        data_sets)
-                """
                 # Evaluate against the test set.
                 print('Test Data Eval:')
                 do_eval(sess,
                         eval_correct,
                         entries_placeholder,
                         labels_placeholder,
-                        data_sets,
-                        task="test_eval")
-
+                        data_set_test
+                        )
     # TODO 5) Read up on SSE4.2 Instructions and GPU computations too
     # TODO 6) Only after having real performance results, you will use a more complex model (RNN for instance)
 
@@ -399,7 +397,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--hidden',
         type=int,
-        default=1000,
+        default=20000,
         help='Number of units in hidden layer 1.'
     )
 
@@ -422,7 +420,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--log_dir',
         type=str,
-        default='/Users/Louis/PycharmProjects/policy_approximation/logs',
+        default='/Users/Louis/PycharmProjects/policy_approximation/logs_2',
         help='Directory to put the log data.'
     )
 
