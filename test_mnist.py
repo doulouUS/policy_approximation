@@ -40,6 +40,25 @@ FLAGS = None
 NUM_CLASSES = 16077 # 46521
 ENTRIES_FEAT = NUM_CLASSES  #  input are of the same shape as output
 
+
+# ----------------------------------------------------------------------
+#
+#       Collect Data
+#
+# ----------------------------------------------------------------------
+
+def variable_summaries(var):
+    """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
+    with tf.name_scope('summaries'):
+        mean = tf.reduce_mean(var)
+        tf.summary.scalar('mean', mean)
+        with tf.name_scope('stddev'):
+            stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+        tf.summary.scalar('stddev', stddev)
+        tf.summary.scalar('max', tf.reduce_max(var))
+        tf.summary.scalar('min', tf.reduce_min(var))
+        tf.summary.histogram('histogram', var)
+
 # ----------------------------------------------------------------------
 #
 #       BUILD THE GRAPH
@@ -51,20 +70,22 @@ def inference(entries, hidden_unit):
     """
     Build the graph for inference only.
     :param entries, placeholder from inputs
-        hidden_unit, placeholder
+    :param hidden_unit, placeholder
 
     :return: softmax_linear, output logits
     """
-
+    # TODO: after modifying placeholder_inputs, assemble indices, values and shape into a sparse matrix HERE
     with tf.name_scope('hidden'):
         weights = tf.Variable(
             tf.truncated_normal([ENTRIES_FEAT, hidden_unit],
                                 stddev=1.0 / math.sqrt(float(ENTRIES_FEAT))),
             name='weights')
+        variable_summaries(weights)
         biases = tf.Variable(tf.zeros([hidden_unit]),
                              name='biases'
                              )
-        hidden = tf.nn.relu(tf.matmul(entries, weights) + biases)
+
+        hidden = tf.nn.relu(tf.sparse_tensor_dense_matmul(entries, weights) + biases)
     # TODO 2) implement matmul with sparse matrix (sparse weights for instance)?
     with tf.name_scope('softmax_linear'):
         weights = tf.Variable(
@@ -113,7 +134,7 @@ def training(loss, learning_rate):
     # Add a scalar summary for the snapshot loss.
     tf.summary.scalar('loss', loss)
     # Create the gradient descent optimizer with the given learning rate.
-    optimizer = tf.train.GradientDescentOptimizer(learning_rate)
+    optimizer = tf.train.AdamOptimizer()  # we trust default parameters, no learning_rate
     # Create a variable to track the global step.
     global_step = tf.Variable(
         0,
@@ -167,10 +188,12 @@ def placeholder_inputs(batch_size):
     # image and label tensors, except the first dimension is now batch_size
     # rather than the full size of the train or test data sets.
     with tf.name_scope('input'):
+        # TODO replace entries_placeholder by 3 placeholders: indices, values and shape
         entries_placeholder = tf.placeholder(tf.float32,
                                              shape=(batch_size, NUM_CLASSES),
                                              name='input-entries'
                                              )
+
         labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size), name="y-input")
     return entries_placeholder, labels_placeholder
 
@@ -192,7 +215,12 @@ def fill_feed_dict(data_set, entries_pl, labels_pl):
     """
     # Create the feed_dict for the placeholders filled with the next
     # `batch size` examples.
+    # TODO: after creating placeholders, transform entries_feed into COO coordinates and adapt the feed dictionary !!
     entries_feed, labels_feed = data_set.next_batch(FLAGS.batch_size)
+    entries_feed = tf.constant(entries_feed)
+    idx = tf.where(tf.not_equal(entries_feed, 0))
+    entries_feed = tf.SparseTensor(idx, tf.gather_nd(entries_feed, idx),entries_feed.get_shape())
+
     feed_dict = {
       entries_pl: entries_feed,
       labels_pl: labels_feed,
@@ -219,7 +247,7 @@ def do_eval(sess,
     # And run one epoch of eval.
     true_count = 0  # Counts the number of correct predictions.
     # TODO reassign on the correct amount of entries_train you want to evaluate your network
-    steps_per_epoch = 5  #  data_set.root_data.num_examples // FLAGS.batch_size
+    steps_per_epoch = 5  # data_set.root_data.num_examples // FLAGS.batch_size
     num_examples = steps_per_epoch * FLAGS.batch_size
     for step in range(steps_per_epoch):
         feed_dict = fill_feed_dict(data_set,
@@ -234,7 +262,6 @@ def do_eval(sess,
 
 def run_training():
     """Train MNIST for a number of steps."""
-    # TODO data_sets should provide either training or testing set !
     # Get the sets of entries and labels for training and Test
     whole_data = rdf.ReadDataFedex()
     percentage_training = 0.7
@@ -267,7 +294,6 @@ def run_training():
         loss_ = loss(logits, labels_placeholder)
 
         # Add to the Graph the Ops that calculate and apply gradients.
-
         train_op = training(loss_, FLAGS.learning_rate)
 
         # Add the Op to compare the logits to the labels during evaluation.
@@ -289,7 +315,6 @@ def run_training():
         sess = tf.Session()
 
         # Instantiate a SummaryWriter to output summaries and the Graph.
-
         summary_writer = tf.summary.FileWriter(FLAGS.log_dir, sess.graph)
 
         # And then after everything is built:
@@ -388,7 +413,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max_steps',
         type=int,
-        default=20000,
+        default=2000,
         help='Number of steps to run trainer.'
     )
 
@@ -397,7 +422,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--hidden',
         type=int,
-        default=20000,
+        default=1000,
         help='Number of units in hidden layer 1.'
     )
 
@@ -420,7 +445,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--log_dir',
         type=str,
-        default='/Users/Louis/PycharmProjects/policy_approximation/logs_2',
+        default='/Users/Louis/PycharmProjects/policy_approximation/logs/log_adam_sparse_entries',
         help='Directory to put the log data.'
     )
 
