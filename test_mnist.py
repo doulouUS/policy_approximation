@@ -86,7 +86,7 @@ def inference(entries, hidden_unit):
                              name='biases'
                              )
 
-        hidden = tf.nn.relu(tf.sparse_tensor_dense_matmul(entries, weights) + biases)
+        hidden = tf.nn.relu(tf.matmul(entries, weights) + biases)
     # TODO 2) implement matmul with sparse matrix (sparse weights for instance)?
     with tf.name_scope('softmax_linear'):
         weights = tf.Variable(
@@ -222,9 +222,9 @@ def fill_feed_dict(data_set, entries_pl, labels_pl):
     # `batch size` examples.
     # TODO: after creating placeholders, transform entries_feed into COO coordinates and adapt the feed dictionary !!
     entries_feed, labels_feed = data_set.next_batch(FLAGS.batch_size)
-    entries_feed = tf.constant(entries_feed)
-    idx = tf.where(tf.not_equal(entries_feed, 0))
-    entries_feed = tf.SparseTensor(idx, tf.gather_nd(entries_feed, idx),entries_feed.get_shape())
+    # entries_feed = tf.constant(entries_feed)
+    # idx = tf.where(tf.not_equal(entries_feed, 0))
+    # entries_feed = tf.SparseTensor(idx, tf.gather_nd(entries_feed, idx),entries_feed.get_shape())
 
     feed_dict = {
       entries_pl: entries_feed,
