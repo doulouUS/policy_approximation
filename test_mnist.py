@@ -24,6 +24,7 @@ from __future__ import print_function
 import argparse
 import sys
 import time
+import sys
 import os.path
 
 # Data
@@ -193,6 +194,10 @@ def placeholder_inputs(batch_size):
                                              shape=(batch_size, NUM_CLASSES),
                                              name='input-entries'
                                              )
+
+        indices_placeholder = tf.placeholder(tf.int64)
+        values_placeholder = tf.placeholder(tf.float32)
+        shape_placeholder = tf.placeholder(tf.int32)
 
         labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size), name="y-input")
     return entries_placeholder, labels_placeholder
@@ -434,20 +439,36 @@ if __name__ == '__main__':
         default=10,
         help='Batch size.  Must divide evenly into the dataset sizes.'
     )
+    if sys.platform == 'darwin':
+        parser.add_argument(
+            '--input_data_dir',
+            type=str,
+            default='/Users/Louis/PycharmProjects/policy_approximation/',
+            help='Directory to put the input data.'
+        )
+    elif sys.platform == 'linux':
+        parser.add_argument(
+            '--input_data_dir',
+            type=str,
+            default='home/louis/Documents/Research/policy_approximation-master/logs',
+            help='Directory to put the input data.'
+        )
 
-    parser.add_argument(
-        '--input_data_dir',
-        type=str,
-        default='/Users/Louis/PycharmProjects/policy_approximation/',
-        help='Directory to put the input data.'
-    )
+    if sys.platform == 'darwin':
+        parser.add_argument(
+            '--log_dir',
+            type=str,
+            default='/Users/Louis/PycharmProjects/policy_approximation/logs/log_adam_sparse_entries',
+            help='Directory to put the log data.'
+        )
 
-    parser.add_argument(
-        '--log_dir',
-        type=str,
-        default='/Users/Louis/PycharmProjects/policy_approximation/logs/log_adam_sparse_entries',
-        help='Directory to put the log data.'
-    )
-
+    # TODO Check this
+    elif sys.platform == 'linux':
+        parser.add_argument(
+            '--log_dir',
+            type=str,
+            default='home/Research/policy_approximation/logs/log_adam_sparse_entries',
+            help='Directory to put the log data.'
+        )
     FLAGS, unparsed = parser.parse_known_args()
     tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)

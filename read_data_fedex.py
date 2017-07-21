@@ -3,12 +3,21 @@ import numpy as np
 import pickle
 import itertools
 import time
-import math
+import sys
 from scipy.sparse.coo import coo_matrix
 
-PATH_TO_DATA = "/Users/Louis/PycharmProjects/policy_approximation/DATA/fedex_pc_cleaned_no_0.data"
-PATH_TO_ADDRESSES = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/gym_foo/envs/addresses.fedex"
-PATH_TO_POSTAL_CODE = "/Users/Louis/PycharmProjects/policy_approximation/DATA/postal_codes_fedex"
+if sys.platform == 'darwin':
+
+    PATH_TO_DATA = "/Users/Louis/PycharmProjects/policy_approximation/DATA/fedex_pc_cleaned_no_0.data"
+    PATH_TO_ADDRESSES = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/gym_foo/envs/addresses.fedex"
+    PATH_TO_POSTAL_CODE = "/Users/Louis/PycharmProjects/policy_approximation/DATA/postal_codes_fedex"
+
+elif sys.platform == 'linux':
+    # TODO we didn't change the path as the data is available
+    PATH_TO_DATA = "/Users/Louis/PycharmProjects/policy_approximation/DATA/fedex_pc_cleaned_no_0.data"
+    PATH_TO_ADDRESSES = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/gym_foo/envs/addresses.fedex"
+    PATH_TO_POSTAL_CODE = "/Users/Louis/PycharmProjects/policy_approximation/DATA/postal_codes_fedex"
+
 
 
 def postal_code_to_ID(postal_code):
@@ -280,7 +289,10 @@ class ReadDataFedex:
         print("____________________________________________________________________________")
         print(" ")
         print(" DATA LOADING...")
-        loaded = np.load('DATA/dataset_pc.fedex.npz')  # dataset_addresses.fedex.npz
+        if sys.platform == 'darwin':
+            loaded = np.load('DATA/dataset_pc.fedex.npz')  # dataset_addresses.fedex.npz
+        elif sys.platform == 'linux':
+            loaded = np.load('/home/louis/Documents/Research/policy_approximation-master/DATA/dataset_pc.fedex.npz')
         self.entries = loaded['inputs']
         self.labels = loaded['labels']
 
