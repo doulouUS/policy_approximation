@@ -19,7 +19,7 @@ import tensorflow as tf
 FLAGS = None
 
 # Load data
-NUM_CLASSES = 16077 # 46521
+NUM_CLASSES = 16077     # 46521
 ENTRIES_FEAT = NUM_CLASSES  #  input are of the same shape as output
 
 
@@ -58,47 +58,63 @@ def inference(entries, hidden_unit):
     """
     # TODO: after modifying placeholder_inputs, assemble indices, values and shape into a sparse matrix HERE
     with tf.name_scope('hidden'):
-        weights = tf.Variable(
+        weights_1 = tf.Variable(
             tf.truncated_normal([ENTRIES_FEAT, hidden_unit],
                                 stddev=1.0 / math.sqrt(float(ENTRIES_FEAT))),
-            name='weights')
-        variable_summaries(weights)
-        biases = tf.Variable(tf.zeros([hidden_unit]),
-                             name='biases'
-                             )
+            name='weights_1')
+        variable_summaries(weights_1)
+        biases_1 = tf.Variable(tf.zeros([hidden_unit]),
+                               name='biases_1')
 
-        hidden = tf.nn.relu(tf.matmul(entries, weights) + biases)
+        hidden = tf.nn.relu(tf.matmul(entries, weights_1) + biases_1)
     # TODO 2) implement matmul with sparse matrix (sparse weights for instance)?
     with tf.name_scope('softmax_linear'):
-        weights = tf.Variable(
+
+        ouput = tf.reshape(hidden, [-1, hidden_unit])  # equal to hidden, but saw an example where a row of 1 is added..
+        softmax_w_t = tf.Variable(
+            tf.truncated_normal([NUM_CLASSES, hidden_unit],
+                                stddev=1.0 / math.sqrt(float(hidden_unit)))
+        )
+
+        softmax_w = tf.transpose(softmax_w_t)  # useful for evaluation after
+
+        softmax_biases = tf.Variable(tf.zeros([NUM_CLASSES]),
+                                     name='softmax_biases')
+
+        return softmax_w_t, softmax_biases, ouput, softmax_w
+
+        #  previous solution for classic softmax: to be reused for evaluation
+        """
+        weights_2 = tf.Variable(
             tf.truncated_normal([hidden_unit, NUM_CLASSES],
                                 stddev=1.0 / math.sqrt(float(hidden_unit))),
-            name='weights')
-        biases = tf.Variable(tf.zeros([NUM_CLASSES]),
-                             name='biases'
-                             )
-        logits = tf.matmul(hidden, weights) + biases
+            name='weights_2')
+        biases_2 = tf.Variable(tf.zeros([NUM_CLASSES]),
+                               name='biases')
+        logits = tf.matmul(hidden, weights_2) + biases_2
 
-    return logits
+        return logits
+        """
 
 
-def loss(logits, labels):
+def loss(softmax_w_t, softmax_biases, output, labels):
     """Calculates the loss from the logits and the labels.
     Args:
-    logits: Logits tensor, float - [batch_size, NUM_CLASSES].
-    labels: Labels tensor, int32 - [batch_size].
+    softmax_w:  tensor, float - weights of the sampled softmax [hidden_unit, NUM_CLASSES].
+    softmax_biases:  tensor, float - biases of the sampled softmax [NUM_CLASSES].
+    ouput: tensor, output of hidden layer
     Returns:
     loss: Loss tensor of type float.
     """
-
     labels = tf.to_int64(labels)
-    cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=labels,
-        logits=logits,
-        name='xentropy'
-    )
-
-    return tf.reduce_mean(cross_entropy, name='xentropy_mean')
+    softmax_loss = tf.nn.sampled_softmax_loss(weights=softmax_w_t,
+                                              biases=softmax_biases,
+                                              labels=tf.reshape(labels, [-1, 1]),
+                                              inputs=output,
+                                              num_sampled=256,
+                                              num_classes=NUM_CLASSES)
+    # TODO reduce_sum instead if NaN appears
+    return tf.reduce_mean(softmax_loss, name='xentropy_mean')
 
 
 def training(loss, learning_rate):
@@ -117,6 +133,7 @@ def training(loss, learning_rate):
     tf.summary.scalar('loss', loss)
     # Create the gradient descent optimizer with the given learning rate.
     optimizer = tf.train.AdamOptimizer()  # we trust default parameters, no learning_rate
+    # optimizer = tf.train.GradientDescentOptimizer(learning_rate)
     # Create a variable to track the global step.
     global_step = tf.Variable(
         0,
@@ -145,7 +162,9 @@ def evaluation(logits, labels):
     # It returns a bool tensor with shape [batch_size] that is true for
     # the examples where the label is in the top k (here k=1)
     # of all logits for that example.
-    correct = tf.nn.in_top_k(logits, labels, 1)
+
+    # return softmax_w_t, softmax_biases, ouput, softmax_w
+    correct = tf.nn.in_top_k(tf.matmul(logits[2], logits[3]) + logits[1], labels, 1)
     # Return the number of true entries.
     return tf.reduce_sum(tf.cast(correct, tf.int32))
 
@@ -176,9 +195,10 @@ def placeholder_inputs(batch_size):
                                              name='input-entries'
                                              )
 
-        indices_placeholder = tf.placeholder(tf.int64)
-        values_placeholder = tf.placeholder(tf.float32)
-        shape_placeholder = tf.placeholder(tf.int32)
+        # to be used when implementing sparse computations
+        # indices_placeholder = tf.placeholder(tf.int64)
+        # values_placeholder = tf.placeholder(tf.float32)
+        # shape_placeholder = tf.placeholder(tf.int32)
 
         labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size), name="y-input")
     return entries_placeholder, labels_placeholder
@@ -277,7 +297,8 @@ def run_training():
                            )
 
         # Add to the Graph the Ops for loss calculation.
-        loss_ = loss(logits, labels_placeholder)
+        # loss(softmax_w_t, softmax_biases, output, labels)
+        loss_ = loss(logits[0], logits[1], logits[2], labels_placeholder)
 
         # Add to the Graph the Ops that calculate and apply gradients.
         train_op = training(loss_, FLAGS.learning_rate)
@@ -399,12 +420,12 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max_steps',
         type=int,
-        default=200000,
+        default=2000,
         help='Number of steps to run trainer.'
     )
 
     # Number of hidden units
-    # TODO nb of units is too low here => 100 unit does not work as good as 1000
+    # TODO nb of units is too low here
     parser.add_argument(
         '--hidden',
         type=int,
@@ -417,9 +438,11 @@ if __name__ == '__main__':
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=10,
+        default=200,
         help='Batch size.  Must divide evenly into the dataset sizes.'
     )
+
+    # input data dir
     if sys.platform == 'darwin':
         parser.add_argument(
             '--input_data_dir',
@@ -431,15 +454,16 @@ if __name__ == '__main__':
         parser.add_argument(
             '--input_data_dir',
             type=str,
-            default='home/louis/Documents/Research/policy_approximation/logs',
+            default='/home/louis/Documents/Research/policy_approximation-master/logs',
             help='Directory to put the input data.'
         )
 
+    # logs location
     if sys.platform == 'darwin':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='/Users/Louis/PycharmProjects/policy_approximation/logs/log_adam_sparse_entries',
+            default='/Users/Louis/PycharmProjects/policy_approximation/logs/sampled_softmax_logs/non_sparse_experiment_30btch',
             help='Directory to put the log data.'
         )
 
@@ -448,7 +472,7 @@ if __name__ == '__main__':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='/home/louis/Documents/Research/policy_approximation/logs/log_naive_adam_long/log_20k_subunit',
+            default='/home/Research/policy_approximation/logs/sampled_softmax_logs/non_sparse_experiment_30btch',
             help='Directory to put the log data.'
         )
     FLAGS, unparsed = parser.parse_known_args()
