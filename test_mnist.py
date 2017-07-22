@@ -418,12 +418,12 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max_steps',
         type=int,
-        default=2000,
+        default=200000,
         help='Number of steps to run trainer.'
     )
 
     # Number of hidden units
-    # TODO nb of units is too low here
+    # TODO nb of units is too low here => 100 unit does not work as good as 1000
     parser.add_argument(
         '--hidden',
         type=int,
@@ -450,7 +450,7 @@ if __name__ == '__main__':
         parser.add_argument(
             '--input_data_dir',
             type=str,
-            default='home/louis/Documents/Research/policy_approximation-master/logs',
+            default='home/louis/Documents/Research/policy_approximation/logs',
             help='Directory to put the input data.'
         )
 
@@ -467,7 +467,7 @@ if __name__ == '__main__':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='home/Research/policy_approximation/logs/log_adam_sparse_entries',
+            default='/home/louis/Documents/Research/policy_approximation/logs/log_naive_adam_long/log_20k_subunit',
             help='Directory to put the log data.'
         )
     FLAGS, unparsed = parser.parse_known_args()

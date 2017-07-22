@@ -292,7 +292,7 @@ class ReadDataFedex:
         if sys.platform == 'darwin':
             loaded = np.load('DATA/dataset_pc.fedex.npz')  # dataset_addresses.fedex.npz
         elif sys.platform == 'linux':
-            loaded = np.load('/home/louis/Documents/Research/policy_approximation-master/DATA/dataset_pc.fedex.npz')
+            loaded = np.load('/home/louis/Documents/Research/policy_approximation/DATA/dataset_pc.fedex.npz')
         self.entries = loaded['inputs']
         self.labels = loaded['labels']
 
