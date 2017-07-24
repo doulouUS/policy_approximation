@@ -51,37 +51,34 @@ def variable_summaries(var):
 def inference(entries, hidden_unit):
     """
     Build the graph for inference only.
-    :param entries, placeholder from inputs
+    :param entries, placeholder from inputs HERE should be of shape [batch_size, 1]
     :param hidden_unit, placeholder
 
     :return: softmax_linear, output logits
     """
     # TODO: after modifying placeholder_inputs, assemble indices, values and shape into a sparse matrix HERE
-    with tf.name_scope('hidden'):
-        weights_1 = tf.Variable(
-            tf.truncated_normal([ENTRIES_FEAT, hidden_unit],
-                                stddev=1.0 / math.sqrt(float(ENTRIES_FEAT))),
-            name='weights_1'
-        )
-        variable_summaries(weights_1)
-        biases_1 = tf.Variable(tf.zeros([hidden_unit]),
-                               name='biases_1')
+    with tf.name_scope('embeddings'):
 
-        # hidden = tf.nn.relu(tf.matmul(entries, weights_1) + biases_1)
-        hidden = tf.tanh(tf.matmul(entries, weights_1) + biases_1)
-    # TODO 2) implement matmul with sparse matrix (sparse weights for instance)?
-    with tf.name_scope('softmax_linear'):
+        embeddings = tf.Variable(tf.random_uniform([NUM_CLASSES, FLAGS.embed_size], -1.0, 1.0),
+                                 name="embeddings"
+                                 )
+        variable_summaries(embeddings)
 
-        ouput = tf.reshape(hidden, [-1, hidden_unit])
-        softmax_w_t = tf.Variable(
-            tf.truncated_normal([NUM_CLASSES, hidden_unit],
-                                stddev=1.0 / math.sqrt(float(hidden_unit)))
-        )
+        embed = tf.nn.embedding_lookup(embeddings, entries)
+        print('embedding shape %s' % (embed.get_shape().as_list()))
 
+    with tf.name_scope('softmax'):
+
+        softmax_weights_t = tf.Variable(tf.truncated_normal([NUM_CLASSES, FLAGS.embed_size],
+                                                            stddev=1.0 / math.sqrt(FLAGS.embed_size),
+                                                            name='softmax_weights')
+                                      )
         softmax_biases = tf.Variable(tf.zeros([NUM_CLASSES]),
                                      name='softmax_biases')
 
-        return softmax_w_t, softmax_biases, ouput
+        return softmax_weights_t, softmax_biases, embed
+
+        #  previous solution for classic softmax: to be reused for evaluation
 
 
 def loss(softmax_w_t, softmax_biases, output, labels):
@@ -95,7 +92,7 @@ def loss(softmax_w_t, softmax_biases, output, labels):
     """
     softmax_loss = tf.nn.sampled_softmax_loss(weights=tf.cast(softmax_w_t, tf.float32),
                                               biases=tf.cast(softmax_biases, tf.float32),
-                                              labels=tf.reshape(tf.to_int32(labels), [-1, 1]),
+                                              labels=tf.reshape(tf.to_int64(labels), [-1, 1]),
                                               inputs=tf.cast(output, tf.float32),
                                               num_sampled=256,
                                               num_classes=NUM_CLASSES)
@@ -138,7 +135,7 @@ def evaluation(logits, labels):
     # TODO Use this function with k greater than 1 to evaluate more generally your net's behavior
     """Evaluate the quality of the logits at predicting the label.
     Args:
-    logits: Logits tensor, float - [batch_size, NUM_CLASSES].
+    logits: Logits tensor, float - [batch_size, embed_size].
     labels: Labels tensor, int32 - [batch_size], with values in the
       range [0, NUM_CLASSES).
     Returns:
@@ -150,7 +147,7 @@ def evaluation(logits, labels):
     # the examples where the label is in the top k (here k=1)
     # of all logits for that example.
 
-    # return softmax_w_t, softmax_biases, ouput
+    # return softmax_weights_t, softmax_biases, embed
     correct = tf.nn.in_top_k(tf.matmul(logits[2], tf.transpose(logits[0])) + logits[1], labels, 1)
     # Return the number of true entries.
     return tf.reduce_sum(tf.cast(correct, tf.int32))
@@ -470,6 +467,22 @@ if __name__ == '__main__':
             type=str,
             default='/home/Research/policy_approximation/logs/sampled_softmax_logs/non_sparse_experiment_30btch',
             help='Directory to put the log data.'
+        )
+
+    if sys.platform == 'darwin':
+        parser.add_argument(
+            '--embed_size',
+            type=str,
+            default=128,
+            help='Dimension of embeddings'
+        )
+
+    elif sys.platform == 'linux':
+        parser.add_argument(
+            '--embed_size',
+            type=str,
+            default=128,
+            help='Dimensions of embeddings.'
         )
     FLAGS, unparsed = parser.parse_known_args()
     tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
