@@ -420,7 +420,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max_steps',
         type=int,
-        default=2000,
+        default=200000,
         help='Number of steps to run trainer.'
     )
 
@@ -438,7 +438,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=200,
+        default=10,
         help='Batch size.  Must divide evenly into the dataset sizes.'
     )
 
@@ -472,7 +472,7 @@ if __name__ == '__main__':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='/home/Research/policy_approximation/logs/sampled_softmax_logs/non_sparse_experiment_30btch',
+            default='/home/Research/policy_approximation/logs/sampled_softmax_logs/non_sparse_30btch',
             help='Directory to put the log data.'
         )
     FLAGS, unparsed = parser.parse_known_args()
