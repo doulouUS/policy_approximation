@@ -233,7 +233,7 @@ def do_eval(sess,
     # And run one epoch of eval.
     true_count = 0  # Counts the number of correct predictions.
     # TODO reassign on the correct amount of entries_train you want to evaluate your network
-    steps_per_epoch = 5  # data_set.root_data.num_examples // FLAGS.batch_size
+    steps_per_epoch = data_set.num_examples // FLAGS.batch_size
     num_examples = steps_per_epoch * FLAGS.batch_size
     for step in range(steps_per_epoch):
         feed_dict = fill_feed_dict(data_set,
@@ -332,8 +332,16 @@ def run_training():
             duration = time.time() - start_time
 
             # Write the summaries and print an overview fairly often.
-            # TODO is it too often with 10?
-            if step % 50 == 0:
+            full_test = [1000, 5000]
+            if step % 100 == 0 and step not in full_test:
+                # Print status to stdout.
+                print('-- Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
+                # Update the events file.
+                summary_str = sess.run(summary, feed_dict=feed_dict)
+                summary_writer.add_summary(summary_str, step)
+                summary_writer.flush()
+
+            elif step in full_test:
                 # Print status to stdout.
                 print('-- Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
                 # Update the events file.
@@ -356,6 +364,7 @@ def run_training():
                         entries_placeholder,
                         labels_placeholder,
                         data_set_train)
+
                 # TODO no validation set yet
                 # Evaluate against the test set.
                 print('Test Data Eval:')
@@ -417,7 +426,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=10,
+        default=30,
         help='Batch size.  Must divide evenly into the dataset sizes.'
     )
     if sys.platform == 'darwin':
@@ -439,16 +448,15 @@ if __name__ == '__main__':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='/Users/Louis/PycharmProjects/policy_approximation/logs/log_adam_sparse_entries',
+            default='/Users/Louis/PycharmProjects/policy_approximation/logs/log_adam_30_btch',
             help='Directory to put the log data.'
         )
 
-    # TODO Check this
     elif sys.platform == 'linux':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='home/Research/policy_approximation/logs/log_adam_sparse_entries',
+            default='home/Research/policy_approximation/logs/log_adam_30_btch',
             help='Directory to put the log data.'
         )
     FLAGS, unparsed = parser.parse_known_args()

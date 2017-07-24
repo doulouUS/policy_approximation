@@ -134,6 +134,7 @@ def training(loss, learning_rate):
     # Create the gradient descent optimizer with the given learning rate.
     optimizer = tf.train.AdamOptimizer()  # we trust default parameters, no learning_rate
     # optimizer = tf.train.GradientDescentOptimizer(learning_rate)
+
     # Create a variable to track the global step.
     global_step = tf.Variable(
         0,
@@ -253,7 +254,7 @@ def do_eval(sess,
     # And run one epoch of eval.
     true_count = 0  # Counts the number of correct predictions.
     # TODO reassign on the correct amount of entries_train you want to evaluate your network
-    steps_per_epoch = 5  # data_set.root_data.num_examples // FLAGS.batch_size
+    steps_per_epoch = data_set.num_examples // FLAGS.batch_size
     num_examples = steps_per_epoch * FLAGS.batch_size
     for step in range(steps_per_epoch):
         feed_dict = fill_feed_dict(data_set,
@@ -353,8 +354,16 @@ def run_training():
             duration = time.time() - start_time
 
             # Write the summaries and print an overview fairly often.
-            # TODO is it too often with 10?
-            if step % 50 == 0:
+            full_test = [1000, 5000]
+            if step % 100 == 0 and step not in full_test:
+                # Print status to stdout.
+                print('-- Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
+                # Update the events file.
+                summary_str = sess.run(summary, feed_dict=feed_dict)
+                summary_writer.add_summary(summary_str, step)
+                summary_writer.flush()
+
+            elif step in full_test:
                 # Print status to stdout.
                 print('-- Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
                 # Update the events file.
@@ -377,6 +386,7 @@ def run_training():
                         entries_placeholder,
                         labels_placeholder,
                         data_set_train)
+
                 # TODO no validation set yet
                 # Evaluate against the test set.
                 print('Test Data Eval:')
@@ -386,6 +396,7 @@ def run_training():
                         labels_placeholder,
                         data_set_test
                         )
+
     # TODO 5) Read up on SSE4.2 Instructions and GPU computations too
     # TODO 6) Only after having real performance results, you will use a more complex model (RNN for instance)
 
@@ -420,7 +431,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max_steps',
         type=int,
-        default=2000,
+        default=6000,
         help='Number of steps to run trainer.'
     )
 
@@ -438,7 +449,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--batch_size',
         type=int,
-        default=200,
+        default=30,
         help='Batch size.  Must divide evenly into the dataset sizes.'
     )
 
@@ -463,7 +474,7 @@ if __name__ == '__main__':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='/Users/Louis/PycharmProjects/policy_approximation/logs/sampled_softmax_logs/non_sparse_experiment_30btch',
+            default='/Users/Louis/PycharmProjects/policy_approximation/logs/sampled_softmax_logs/non_sparse_experiment_30btch_2',
             help='Directory to put the log data.'
         )
 
