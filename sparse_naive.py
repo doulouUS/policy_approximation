@@ -3,6 +3,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+from scipy.sparse import coo_matrix
 
 import argparse
 import sys
@@ -48,25 +49,33 @@ def variable_summaries(var):
 # ----------------------------------------------------------------------
 
 
-def inference(entries, hidden_unit):
+def inference(indices, values, dense_shape, hidden_unit):
     """
     Build the graph for inference only.
-    :param entries, placeholder from inputs
+    :param indices,
+    :param values,
+    :param shape, placeholder from inputs_placeholder
     :param hidden_unit, placeholder
+
     :return: softmax_linear, output logits
     """
     # TODO: after modifying placeholder_inputs, assemble indices, values and shape into a sparse matrix HERE
+    entries = tf.sparse_reorder(tf.SparseTensor(indices=indices,
+                                                values=values,
+                                                dense_shape=dense_shape))
+
     with tf.name_scope('hidden'):
         weights = tf.Variable(
             tf.truncated_normal([ENTRIES_FEAT, hidden_unit],
                                 stddev=1.0 / math.sqrt(float(ENTRIES_FEAT))),
-            name='weights')
+            name='weights'
+        )
         variable_summaries(weights)
         biases = tf.Variable(tf.zeros([hidden_unit]),
                              name='biases'
                              )
 
-        hidden = tf.nn.relu(tf.matmul(entries, weights) + biases)
+        hidden = tf.nn.relu(tf.sparse_tensor_dense_matmul(sp_a=entries, b=weights) + biases)
     # TODO 2) implement matmul with sparse matrix (sparse weights for instance)?
     with tf.name_scope('softmax_linear'):
         weights = tf.Variable(
@@ -170,20 +179,18 @@ def placeholder_inputs(batch_size):
     # rather than the full size of the train or test data sets.
     with tf.name_scope('input'):
         # TODO replace entries_placeholder by 3 placeholders: indices, values and shape
-        entries_placeholder = tf.placeholder(tf.float32,
-                                             shape=(batch_size, NUM_CLASSES),
-                                             name='input-entries'
-                                             )
+        # entries_placeholder = tf.placeholder(tf.float32,shape=(batch_size, NUM_CLASSES),name='input-entries')
 
-        indices_placeholder = tf.placeholder(tf.int64)
-        values_placeholder = tf.placeholder(tf.float32)
-        shape_placeholder = tf.placeholder(tf.int32)
+        indices_placeholder = tf.placeholder(tf.int64)  # , shape=[None, NUM_CLASSES])
+        values_placeholder = tf.placeholder(tf.float32)  # , shape=[None])
+        shape_placeholder = tf.placeholder(tf.int64) # , shape=[None, NUM_CLASSES])
 
-        labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size), name="y-input")
-    return entries_placeholder, labels_placeholder
+        labels_placeholder = tf.placeholder(tf.int32, shape=[batch_size], name="y-input")
+
+    return indices_placeholder, values_placeholder, shape_placeholder, labels_placeholder
 
 
-def fill_feed_dict(data_set, entries_pl, labels_pl):
+def fill_feed_dict(data_set, indices_pl, values_pl, shape_pl, labels_pl):
     # TODO are you sure of dataset's type?
     """Fills the feed_dict for training the given step.
     A feed_dict takes the form of:
@@ -201,21 +208,26 @@ def fill_feed_dict(data_set, entries_pl, labels_pl):
     # Create the feed_dict for the placeholders filled with the next
     # `batch size` examples.
     # TODO: after creating placeholders, transform entries_feed into COO coordinates and adapt the feed dictionary !!
-    entries_feed, labels_feed = data_set.next_batch(FLAGS.batch_size)
+    # entries_feed, labels_feed = data_set.next_batch(FLAGS.batch_size)
+    indices_feed, values_feed, shape_feed, labels_feed = data_set.next_sp_batch(FLAGS.batch_size)
     # entries_feed = tf.constant(entries_feed)
     # idx = tf.where(tf.not_equal(entries_feed, 0))
     # entries_feed = tf.SparseTensor(idx, tf.gather_nd(entries_feed, idx),entries_feed.get_shape())
 
     feed_dict = {
-      entries_pl: entries_feed,
-      labels_pl: labels_feed,
+        indices_pl:indices_feed,
+        values_pl:values_feed,
+        shape_pl:shape_feed,
+        labels_pl: labels_feed,
     }
     return feed_dict
 
 
 def do_eval(sess,
             eval_correct,
-            entries_placeholder,
+            indices_pl,
+            values_pl,
+            shape_pl,
             labels_placeholder,
             data_set
             ):
@@ -227,15 +239,17 @@ def do_eval(sess,
     labels_placeholder: The labels placeholder.
     data_set: The set of entries and labels to evaluate, from
       Dataset().
+
     """
     # And run one epoch of eval.
     true_count = 0  # Counts the number of correct predictions.
-    # TODO reassign on the correct amount of entries_train you want to evaluate your network
-    steps_per_epoch = data_set.num_examples // FLAGS.batch_size
+    steps_per_epoch = 30  # data_set.num_examples // FLAGS.batch_size
     num_examples = steps_per_epoch * FLAGS.batch_size
     for step in range(steps_per_epoch):
         feed_dict = fill_feed_dict(data_set,
-                                   entries_placeholder,
+                                   indices_pl,
+                                   values_pl,
+                                   shape_pl,
                                    labels_placeholder
                                    )
         true_count += sess.run(eval_correct, feed_dict=feed_dict)
@@ -261,16 +275,28 @@ def run_training():
     data_set_train = rdf.Dataset(train_entries, train_labels)
     data_set_test = rdf.Dataset(test_entries, test_labels)
 
+    print("next batch: ", data_set_train.next_sp_batch(batch_size=1)[0])
+
+    # Exploitable format for sparse exploitation
+    # indices_train = data_set_train.idc
+    # values_train = data_set_train.val
+    # shape_train = data_set_train.shape
+
+    # indices_test = data_set_test.idc
+    # values_test = data_set_test.val
+    # shape_test = data_set_test.shape
+    print("Finished loading data")
+
     # Tell TensorFlow that the model will be built into the default Graph.
 
     with tf.Graph().as_default():
         # Generate placeholders for the entries and labels.
-        entries_placeholder, labels_placeholder = placeholder_inputs(
+        indices_placeholder, values_placeholder, shape_placeholder, labels_placeholder = placeholder_inputs(
             FLAGS.batch_size
         )
 
         # Build a Graph that computes predictions from the inference model.
-        logits = inference(entries_placeholder,
+        logits = inference(indices_placeholder, values_placeholder, shape_placeholder,
                            FLAGS.hidden
                            )
 
@@ -314,7 +340,9 @@ def run_training():
             # Fill a feed dictionary with the actual set of entries and labels
             # for this particular training step.
             feed_dict = fill_feed_dict(data_set_train,
-                                       entries_placeholder,
+                                       indices_placeholder,
+                                       values_placeholder,
+                                       shape_placeholder,
                                        labels_placeholder
                                        )
 
@@ -359,7 +387,9 @@ def run_training():
                 print('Training Data Eval:')
                 do_eval(sess,
                         eval_correct,
-                        entries_placeholder,
+                        indices_placeholder,
+                        values_placeholder,
+                        shape_placeholder,
                         labels_placeholder,
                         data_set_train)
 
@@ -368,7 +398,9 @@ def run_training():
                 print('Test Data Eval:')
                 do_eval(sess,
                         eval_correct,
-                        entries_placeholder,
+                        indices_placeholder,
+                        values_placeholder,
+                        shape_placeholder,
                         labels_placeholder,
                         data_set_test
                         )
@@ -406,7 +438,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max_steps',
         type=int,
-        default=1001,
+        default=2000,
         help='Number of steps to run trainer.'
     )
 
@@ -461,4 +493,4 @@ if __name__ == '__main__':
     start_time = time.time()
     tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
     end_time = time.time()
-    print("TOTAL TIME:  ", end_time - start_time)
+    print("TOTAL TIME:   ", end_time - start_time)

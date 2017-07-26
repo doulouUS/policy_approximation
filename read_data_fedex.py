@@ -323,6 +323,14 @@ class Dataset:
         self.entries = entries
         self.labels = labels
 
+        # Sparse version
+        sp_data = coo_matrix(self.entries)
+
+        self.idc = (sp_data.row, sp_data.col)
+        self.val = sp_data.data
+        self.shape = sp_data.shape
+
+        # data shape
         self.num_examples = entries.shape[0]
         self.num_features = entries.shape[1]
 
@@ -377,6 +385,21 @@ class Dataset:
             end = self.index_in_epoch
             return self.entries[start_:end, :], self.labels[start_:end]
 
+    def next_sp_batch(self, batch_size, shuffle=True):
+        """
+        Equivalent of self.next_batch but for sparse data
+        :param batch_size:
+        :param shuffle:
+        :return: indices, values, shape, labels
+        """
+
+        entries, labels = self.next_batch(batch_size=batch_size, shuffle=shuffle)
+
+        # sparse transformation
+        sp_batch = coo_matrix(entries)
+
+        return np.column_stack((np.asarray(sp_batch.row), np.asarray(sp_batch.col))), sp_batch.data, sp_batch.shape,\
+               labels
 
 if __name__ == "__main__":
 
