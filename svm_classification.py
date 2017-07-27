@@ -5,6 +5,9 @@ import math
 
 import read_data_fedex as rdf
 
+# TODO The kernel trick!
+# TODO RBF too!
+
 # Get the sets of entries and labels for training and Test
 whole_data = rdf.ReadDataFedex()
 percentage_training = 0.7

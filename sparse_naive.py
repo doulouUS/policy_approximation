@@ -23,7 +23,8 @@ FLAGS = None
 NUM_CLASSES = 16077 # 46521
 ENTRIES_FEAT = NUM_CLASSES  #  input are of the same shape as output
 
-
+# TODO: to speed up computations: 1/ Improve the stream of data (no conversion from dense to sparse) => not mandatory?
+#TODO: to speed up computations: 2/ Reduce numbers of summary writings => easy to do and efficient!
 # ----------------------------------------------------------------------
 #
 #       Collect Data
@@ -361,11 +362,14 @@ def run_training():
             full_test = [1000, 5000]
             if step % 100 == 0 and step not in full_test:
                 # Print status to stdout.
+                start_time_data = time.time()
                 print('-- Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
                 # Update the events file.
                 summary_str = sess.run(summary, feed_dict=feed_dict)
                 summary_writer.add_summary(summary_str, step)
                 summary_writer.flush()
+                end_time_data = time.time()
+                print("Time for writing summaries: ", end_time_data - start_time_data)
 
             elif step in full_test:
                 # Print status to stdout.
@@ -438,7 +442,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max_steps',
         type=int,
-        default=2000,
+        default=1001,
         help='Number of steps to run trainer.'
     )
 
@@ -447,7 +451,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--hidden',
         type=int,
-        default=1000,
+        default=10000,
         help='Number of units in hidden layer 1.'
     )
 
@@ -478,7 +482,7 @@ if __name__ == '__main__':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='/Users/Louis/PycharmProjects/policy_approximation/logs/log_adam_30_btch',
+            default='/Users/Louis/PycharmProjects/policy_approximation/logs/log_adam_30_btch_sparse',
             help='Directory to put the log data.'
         )
 
@@ -493,4 +497,4 @@ if __name__ == '__main__':
     start_time = time.time()
     tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
     end_time = time.time()
-    print("TOTAL TIME:   ", end_time - start_time)
+    print("TOTAL TIME:  ", end_time - start_time)

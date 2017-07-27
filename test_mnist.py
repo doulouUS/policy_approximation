@@ -230,8 +230,7 @@ def do_eval(sess,
     """
     # And run one epoch of eval.
     true_count = 0  # Counts the number of correct predictions.
-    # TODO reassign on the correct amount of entries_train you want to evaluate your network
-    steps_per_epoch = data_set.num_examples // FLAGS.batch_size
+    steps_per_epoch = 30  # data_set.num_examples // FLAGS.batch_size
     num_examples = steps_per_epoch * FLAGS.batch_size
     for step in range(steps_per_epoch):
         feed_dict = fill_feed_dict(data_set,

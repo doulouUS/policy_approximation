@@ -392,11 +392,13 @@ class Dataset:
         :param shuffle:
         :return: indices, values, shape, labels
         """
-
         entries, labels = self.next_batch(batch_size=batch_size, shuffle=shuffle)
 
         # sparse transformation
+        # TODO for full speed up, sparse matrix should be written in files and access as such
+        # Gain: 10mn every 100,000 step (not a priority though)
         sp_batch = coo_matrix(entries)
+
 
         return np.column_stack((np.asarray(sp_batch.row), np.asarray(sp_batch.col))), sp_batch.data, sp_batch.shape,\
                labels
