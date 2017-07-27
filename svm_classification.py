@@ -24,4 +24,4 @@ data_set_test = rdf.Dataset(test_entries, test_labels)
 C = 1.
 svc = svm.SVC(kernel='linear', C=C).fit(data_set_train.entries, data_set_train.labels)
 pred = svc.predict(data_set_test.entries)
-print("Accuracy on test set: ", pred.shape[0] - np.count_nonzero(pred - data_set_test.labels) )
+print("Accuracy on test set: ", (pred.shape[0] - np.count_nonzero(pred - data_set_test.labels))/pred.shape[0])

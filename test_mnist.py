@@ -146,8 +146,9 @@ def evaluation(logits, labels):
     # the examples where the label is in the top k (here k=1)
     # of all logits for that example.
     correct = tf.nn.in_top_k(logits, labels, 1)
+    correct_among_k = tf.nn.in_top_k(logits, labels, 3)
     # Return the number of true entries.
-    return tf.reduce_sum(tf.cast(correct, tf.int32))
+    return tf.reduce_sum(tf.cast(correct, tf.int32)), tf.reduce_sum(tf.cast(correct_among_k, tf.int32))
 
 # ----------------------------------------------------------------------
 #
@@ -176,9 +177,9 @@ def placeholder_inputs(batch_size):
                                              name='input-entries'
                                              )
 
-        indices_placeholder = tf.placeholder(tf.int64)
-        values_placeholder = tf.placeholder(tf.float32)
-        shape_placeholder = tf.placeholder(tf.int32)
+        # indices_placeholder = tf.placeholder(tf.int64)
+        # values_placeholder = tf.placeholder(tf.float32)
+        # shape_placeholder = tf.placeholder(tf.int32)
 
         labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size), name="y-input")
     return entries_placeholder, labels_placeholder
@@ -232,7 +233,7 @@ def do_eval(sess,
     """
     # And run one epoch of eval.
     true_count = 0  # Counts the number of correct predictions.
-    # TODO reassign on the correct amount of entries_train you want to evaluate your network
+    true_count_among_k = 0
     steps_per_epoch = data_set.num_examples // FLAGS.batch_size
     num_examples = steps_per_epoch * FLAGS.batch_size
     for step in range(steps_per_epoch):
@@ -240,11 +241,14 @@ def do_eval(sess,
                                    entries_placeholder,
                                    labels_placeholder
                                    )
-        true_count += sess.run(eval_correct, feed_dict=feed_dict)
+        true_count += sess.run(eval_correct[0], feed_dict=feed_dict)
+        true_count_among_k += sess.run(eval_correct[1], feed_dict=feed_dict)
+
     precision = float(true_count) / num_examples
+    precision_among_k = float(true_count_among_k) / num_examples
     print('  Num examples: %d  Num correct: %d  Precision @ 1: %0.04f' %
           (num_examples, true_count, precision))
-
+    print('Precision among the k best (k=3) ', precision_among_k)
 
 def run_training():
     """Train MNIST for a number of steps."""
@@ -332,7 +336,7 @@ def run_training():
             duration = time.time() - start_time
 
             # Write the summaries and print an overview fairly often.
-            full_test = [1000, 5000]
+            full_test = [15000, 49500]
             if step % 100 == 0 and step not in full_test:
                 # Print status to stdout.
                 print('-- Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
@@ -408,7 +412,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max_steps',
         type=int,
-        default=2000,
+        default=50000,
         help='Number of steps to run trainer.'
     )
 
@@ -440,7 +444,7 @@ if __name__ == '__main__':
         parser.add_argument(
             '--input_data_dir',
             type=str,
-            default='home/louis/Documents/Research/policy_approximation-master/logs',
+            default='home/louis/Documents/Research/policy_approximation/logs',
             help='Directory to put the input data.'
         )
 
@@ -456,7 +460,8 @@ if __name__ == '__main__':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='home/Research/policy_approximation/logs/log_adam_30_btch',
+            default='home/Research/policy_approximation/logs/log_adam_30b_1000u' +
+                    '_overall_perf',
             help='Directory to put the log data.'
         )
     FLAGS, unparsed = parser.parse_known_args()
