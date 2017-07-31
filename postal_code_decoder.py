@@ -1,15 +1,22 @@
 import pandas as pd
 import numpy as np
 import pickle
-import geocoder
-import matplotlib.pyplot as plt
-import itertools
-import time
-import math
-from scipy.sparse.coo import coo_matrix
+# import geocoder
+import requests
+
+# Mapping
+from bokeh.io import output_file, show
+from bokeh.models import (
+  GMapPlot, GMapOptions, ColumnDataSource, Circle, DataRange1d, PanTool, WheelZoomTool, BoxSelectTool
+)
 
 PATH_TO_DATA = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/dynamics/demand_models/fedex.data"
 PATH_TO_ADDRESSES = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/gym_foo/envs/addresses.fedex"
+
+# API Google
+API_key = "AIzaSyCXPGUPh1D31z7aQew0RCxwSopLSv0GNYw"
+API_web_viz = "AIzaSyApMtNEiMXlpRju4TR8my3lK_0tG-VafPU"
+url = "https://maps.googleapis.com/maps/api/geocode/json?"
 
 
 def ID_to_address(id):
@@ -18,6 +25,55 @@ def ID_to_address(id):
         addresses = pickle.load(f)
 
     return addresses[id]
+
+def clutter():
+    """
+    This is not really a function, just the code used in the main below, to clean the data
+    :return:
+    """
+    # this is looong
+    # fedex = Datasets(PATH_TO_DATA)
+    # np.savez_compressed("dataset.fedex", inputs=fedex.entries, labels=fedex.labels)
+
+
+    # Cleaner of data (to be runned again)
+    raw_data = pd.read_csv(
+        PATH_TO_DATA,
+        header=0,
+        delim_whitespace=True
+    )
+
+    cleaner(raw_data=raw_data)
+
+    print("_____________________________________")
+    path = "/Users/Louis/PycharmProjects/policy_approximation/DATA/fedex_pc_cleaned.data"
+    data_cleaned = pd.read_csv(
+        path,
+        header=0,
+        delim_whitespace=True
+    )
+
+    data_cleaned_copy = data_cleaned
+    print("No postal code ", len(data_cleaned[data_cleaned["PostalCode"] == 0]) / len(data_cleaned))
+    postal_code_to_sample_from = list(data_cleaned[data_cleaned["PostalCode"] != 0]["PostalCode"])
+    idx_error_input = data_cleaned[data_cleaned["PostalCode"] == 0].index
+
+    fill_postal_code = np.random.choice(postal_code_to_sample_from, len(idx_error_input))
+    print(fill_postal_code)
+
+    data_cleaned_copy.loc[idx_error_input, 'PostalCode'] = fill_postal_code
+
+    print("are there still 0 postal codes? ", len(data_cleaned_copy[data_cleaned_copy["PostalCode"] == 0]))
+
+    array = np.asarray(data_cleaned_copy.as_matrix())
+    header = "StopDate WeekDay StopOrder StopStartTime Address PostalCode CourierSuppliedAddress ReadyTimePickup" \
+             " CloseTimePickup PickupType WrongDayLateCount RightDayLateCount FedExID Longitude Latitude"
+
+    fmt = ['%.8d', '%.2d', '%.2d', '%.4d', '%.6d', '%.4d', '%.4d', '%.4d', '%.4d', '%.4d', '%.4d', '%.4d',
+           '%.4d', '%.18f', '%.18f']
+
+    np.savetxt('fedex_pc_cleaned_no_0.data', array, fmt=fmt, header=header)
+    print("File written, hope it's fine !")
 
 
 def cleaner(raw_data):
@@ -78,67 +134,83 @@ def cleaner(raw_data):
 
 if __name__ == "__main__":
     PATH_TO_POSTAL_CODE = "/Users/Louis/PycharmProjects/policy_approximation/DATA/postal_codes_2_fedex"
+    # TODO: retrieve geocode for the next batch 2000-4000 => poor results...
+    # Location to ID lookup and vice-versa
+    with open("DATA/postal_codes_fedex", 'rb') as f:
+        id_to_pc = pickle.load(f)
 
-    """
-    # this is looong
-    # fedex = Datasets(PATH_TO_DATA)
-    # np.savez_compressed("dataset.fedex", inputs=fedex.entries, labels=fedex.labels)
+    pc_to_id = {j: i for i, j in enumerate(id_to_pc)}
 
+    # pc to coordinates using API
 
-    # Cleaner of data (to be runned again)
-    raw_data = pd.read_csv(
-        PATH_TO_DATA,
-        header=0,
-        delim_whitespace=True
+    increase_pc_list = sorted(pc_to_id.keys())
+    print("Total postal code to retrieve ", len(increase_pc_list))
+    pc_l1 = increase_pc_list[0:2000]  # day 1 of stealing google
+
+    pc_to_coords = {}  # store results with a dict {postalcode : {'lng': ?? , 'lat' : ??}}
+    count_err = 0
+    for postal_code in pc_l1:
+
+        params = { "address" : "Singapore " + str(postal_code),
+                   "sensor" : "false",
+                   "region" : ".sg",
+                   'key' : API_key
+                  }
+        try:
+            results = requests.get(
+                url,
+                params=params
+            ).json()
+
+            # append coords at the postal code
+            pc_to_coords[postal_code] = {
+                'lng':results['results'][0]['geometry']['location']['lng'],
+                'lat':results['results'][0]['geometry']['location']['lat']
+            }
+        except:
+            pc_to_coords[postal_code] = 'error'
+            print("error retrieving")
+            count_err += 1
+
+    # save pc_to_coords
+    with open('/Users/Louis/PycharmProjects/policy_approximation/DATA/pc_to_coordinates/pc_to_coord_0_2000', "wb") as f:
+        pickle.dump(pc_to_coords, f)
+
+    print("Number of errors while retrieving coordinates: ", count_err)
+
+    # TODO: regroup this in a function in order to plot easily on the same map different color point
+    # --------------------- VISUALIZATION -----------------------------
+    # input: postal codes, color (to differentiate addresses nature)
+    with open('/Users/Louis/PycharmProjects/policy_approximation/DATA/pc_to_coordinates/pc_to_coord_0_2000', "rb") as f:
+        pc_to_coord = pickle.load(f)
+
+    print(pc_to_coord)
+
+    map_options = GMapOptions(lat=1.29, lng=103.8, map_type="roadmap", zoom=11)
+
+    plot = GMapPlot(
+        x_range=DataRange1d(), y_range=DataRange1d(), map_options=map_options
+    )
+    plot.title.text = "Singapore"
+
+    # For GMaps to function, Google requires you obtain and enable an API key:
+    #
+    #     https://developers.google.com/maps/documentation/javascript/get-api-key
+    #
+    # Replace the value below with your personal API key:
+    plot.api_key = API_web_viz
+    keys = list(pc_to_coord.keys())[0:1000]
+    source = ColumnDataSource(
+        data=dict(
+            lat=[pc_to_coord[p]['lat'] for p in keys],
+            lon=[pc_to_coord[p]['lng'] for p in keys],
+        )
     )
 
-    cleaner(raw_data=raw_data)
-    """
-    """
-    print("_____________________________________")
-    path = "/Users/Louis/PycharmProjects/policy_approximation/DATA/fedex_pc_cleaned.data"
-    data_cleaned = pd.read_csv(
-        path,
-        header=0,
-        delim_whitespace=True
-    )
+    circle = Circle(x="lon", y="lat", size=15, fill_color="blue", fill_alpha=0.8, line_color=None)
+    plot.add_glyph(source, circle)
 
-    data_cleaned_copy = data_cleaned
-    print("No postal code ", len(data_cleaned[data_cleaned["PostalCode"] == 0])/len(data_cleaned))
-    postal_code_to_sample_from = list(data_cleaned[data_cleaned["PostalCode"] != 0]["PostalCode"])
-    idx_error_input = data_cleaned[data_cleaned["PostalCode"] == 0].index
+    plot.add_tools(PanTool(), WheelZoomTool(), BoxSelectTool())
+    # output_file("gmap_plot.html")
+    show(plot)
 
-    fill_postal_code = np.random.choice(postal_code_to_sample_from, len(idx_error_input))
-    print(fill_postal_code)
-
-    data_cleaned_copy.loc[idx_error_input, 'PostalCode'] = fill_postal_code
-
-    print("are there still 0 postal codes? ", len(data_cleaned_copy[data_cleaned_copy["PostalCode"] == 0 ]))
-
-    array = np.asarray(data_cleaned_copy.as_matrix())
-    header = "StopDate WeekDay StopOrder StopStartTime Address PostalCode CourierSuppliedAddress ReadyTimePickup" \
-             " CloseTimePickup PickupType WrongDayLateCount RightDayLateCount FedExID Longitude Latitude"
-
-    fmt = ['%.8d', '%.2d', '%.2d', '%.4d', '%.6d', '%.4d', '%.4d', '%.4d', '%.4d', '%.4d', '%.4d', '%.4d',
-           '%.4d', '%.18f', '%.18f']
-
-    np.savetxt('fedex_pc_cleaned_no_0.data', array, fmt=fmt, header=header)
-    print("File written, hope it's fine !")
-
-    # list creation to replace wrong postal codes
-    """
-    path = "/Users/Louis/PycharmProjects/policy_approximation/DATA/fedex_pc_cleaned_no_0.data"
-    data_cleaned = pd.read_csv(
-        path,
-        header=0,
-        delim_whitespace=True
-    )
-
-    unique_postal_code = sorted(list(set(data_cleaned["PostalCode"])))
-    print("allo", unique_postal_code)
-
-
-    with open("DATA/postal_codes_2_fedex", "rb") as f:
-        pc = pickle.load(f)
-
-    print(pc.index(18000))

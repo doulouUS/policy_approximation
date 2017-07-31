@@ -24,7 +24,9 @@ NUM_CLASSES = 16077 # 46521
 ENTRIES_FEAT = NUM_CLASSES  #  input are of the same shape as output
 
 # TODO: to speed up computations: 1/ Improve the stream of data (no conversion from dense to sparse) => not mandatory?
-#TODO: to speed up computations: 2/ Reduce numbers of summary writings => easy to do and efficient!
+# TODO: to speed up computations: 2/ Reduce numbers of summary writings => easy to do and efficient!
+# TODO: implement multithreading to have a queue of batches always ready. How to shuffle batches with this method?
+# (https://blog.metaflow.fr/tensorflow-how-to-optimise-your-input-pipeline-with-queues-and-multi-threading-e7c3874157e0)
 # ----------------------------------------------------------------------
 #
 #       Collect Data
@@ -65,28 +67,44 @@ def inference(indices, values, dense_shape, hidden_unit):
                                                 values=values,
                                                 dense_shape=dense_shape))
 
-    with tf.name_scope('hidden'):
-        weights = tf.Variable(
+    with tf.name_scope('hidden1'):
+        weights1 = tf.Variable(
             tf.truncated_normal([ENTRIES_FEAT, hidden_unit],
                                 stddev=1.0 / math.sqrt(float(ENTRIES_FEAT))),
-            name='weights'
+            name='weights1'
         )
-        variable_summaries(weights)
-        biases = tf.Variable(tf.zeros([hidden_unit]),
-                             name='biases'
-                             )
+        variable_summaries(weights1)
+        biases1 = tf.Variable(tf.zeros([hidden_unit]),
+                              name='biases1'
+                              )
 
-        hidden = tf.nn.relu(tf.sparse_tensor_dense_matmul(sp_a=entries, b=weights) + biases)
+        hidden1 = tf.nn.relu(tf.sparse_tensor_dense_matmul(sp_a=entries, b=weights1) + biases1)
     # TODO 2) implement matmul with sparse matrix (sparse weights for instance)?
-    with tf.name_scope('softmax_linear'):
-        weights = tf.Variable(
+    with tf.name_scope('hidden2'):
+
+        weights2 = tf.Variable(
             tf.truncated_normal([hidden_unit, NUM_CLASSES],
                                 stddev=1.0 / math.sqrt(float(hidden_unit))),
-            name='weights')
-        biases = tf.Variable(tf.zeros([NUM_CLASSES]),
-                             name='biases'
-                             )
-        logits = tf.matmul(hidden, weights) + biases
+            name='weights2')
+        biases2 = tf.Variable(tf.zeros([NUM_CLASSES]),
+                              name='biases2'
+                              )
+
+
+    #    hidden2 = tf.nn.relu(tf.matmul(hidden1, weights2) + biases2)
+
+    # with tf.name_scope('hidden3'):
+    #    weights3 = tf.Variable(
+    #        tf.truncated_normal([5000, NUM_CLASSES],
+    #                            stddev=1.0 / math.sqrt(float(hidden_unit))),
+    #        name='weights3')
+    #
+    #    biases3 = tf.Variable(tf.zeros([NUM_CLASSES]),
+    #                          name='biases3'
+    #                          )
+    #    logits = tf.matmul(hidden2, weights3) + biases3
+    #
+        logits = tf.add(tf.matmul(hidden1, weights2), biases2, name="predictions")
 
     return logits
 
@@ -100,14 +118,15 @@ def loss(logits, labels):
     loss: Loss tensor of type float.
     """
 
-    labels = tf.to_int64(labels)
-    cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=labels,
-        logits=logits,
-        name='xentropy'
-    )
+    with tf.name_scope('loss'):
+        labels = tf.to_int64(labels)
+        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            labels=labels,
+            logits=logits,
+            name='xentropy'
+        )
 
-    return tf.reduce_mean(cross_entropy, name='xentropy_mean')
+        return tf.reduce_mean(cross_entropy, name='xentropy_mean')
 
 
 def training(loss, learning_rate):
@@ -276,8 +295,6 @@ def run_training():
     data_set_train = rdf.Dataset(train_entries, train_labels)
     data_set_test = rdf.Dataset(test_entries, test_labels)
 
-    print("next batch: ", data_set_train.next_sp_batch(batch_size=1)[0])
-
     # Exploitable format for sparse exploitation
     # indices_train = data_set_train.idc
     # values_train = data_set_train.val
@@ -334,6 +351,9 @@ def run_training():
         sess.run(init)
 
         # Start the training loop.
+
+        nodes = [n.name for n in tf.get_default_graph().as_graph_def().node]
+        print("nodes of our graph ", nodes)
 
         for step in range(FLAGS.max_steps):
             start_time = time.time()
@@ -451,7 +471,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--hidden',
         type=int,
-        default=10000,
+        default=600,
         help='Number of units in hidden layer 1.'
     )
 
@@ -494,7 +514,4 @@ if __name__ == '__main__':
             help='Directory to put the log data.'
         )
     FLAGS, unparsed = parser.parse_known_args()
-    start_time = time.time()
     tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
-    end_time = time.time()
-    print("TOTAL TIME:  ", end_time - start_time)

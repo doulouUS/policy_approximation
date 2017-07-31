@@ -66,7 +66,7 @@ class Datasets:
 
         indices, values, dense_shape, indices_label, values_label = self.get_sparse_rpz_loc(
             [1, len(self.start_tour_idx) - 1],
-            column=mode,  # "postal_code" is not supported yet
+            column=mode,
             cur_loc_code=1,
             rem_deliv_code=0.5,
             rem_pickup_code=-0.5
@@ -108,13 +108,6 @@ class Datasets:
             addresses = pickle.load(f)
 
         return addresses[id]
-
-    def get_batch(self, range_tour):
-        """
-        Return training example
-        :return:
-        """
-        NotImplemented
 
     def get_rem_deliv(self, range):
         """
@@ -282,19 +275,41 @@ class Datasets:
 
 
 class ReadDataFedex:
-    "Fast access to pre-saved data + help for manipulation (generate batches etc.)"
+    "Fast access to pre-saved data"
 
-    def __init__(self):
+    def __init__(self, mode="dense"):
+        # TODO implement the "sparse" mode
+        #  - store indices and values by batches (one batch = one line of the dense array) using python dict?
+        #  -
+        """
+
+        :param mode: string, "dense" (for entries and labels) or "sparse" (for indices, values and labels)
+        """
 
         print("____________________________________________________________________________")
         print(" ")
         print(" DATA LOADING...")
-        if sys.platform == 'darwin':
-            loaded = np.load('DATA/dataset_pc.fedex.npz')  # dataset_addresses.fedex.npz
-        elif sys.platform == 'linux':
-            loaded = np.load('/home/louis/Documents/Research/policy_approximation-master/DATA/dataset_pc.fedex.npz')
-        self.entries = loaded['inputs']
-        self.labels = loaded['labels']
+
+        if mode == "dense":
+            if sys.platform == 'darwin':
+                loaded = np.load('DATA/dataset_pc.fedex.npz')
+            elif sys.platform == 'linux':
+                loaded = np.load('/home/louis/Documents/Research/policy_approximation-master/DATA/dataset_pc.fedex.npz')
+
+            self.entries = loaded['inputs']
+            self.labels = loaded['labels']
+
+        elif mode == "sparse":
+            # TODO correct file names
+            if sys.platform == 'darwin':
+                loaded = np.load('DATA/dataset_pc.fedex.npz')
+            elif sys.platform == 'linux':
+                loaded = np.load('/home/louis/Documents/Research/policy_approximation-master/DATA/dataset_pc.fedex.npz')
+
+            # self.indices = ...
+        else:
+            print('mode param is wrong. Either dense or sparse, here it is set to ', mode)
+
 
         print(" DATA SUCCESSFULLY LOADED ! ")
         print("Shape of the entries:    ", self.entries.shape)
@@ -399,8 +414,9 @@ class Dataset:
         # Gain: 10mn every 100,000 step (not a priority though)
         sp_batch = coo_matrix(entries)
 
-
-        return np.column_stack((np.asarray(sp_batch.row), np.asarray(sp_batch.col))), sp_batch.data, sp_batch.shape,\
+        return np.column_stack((np.asarray(sp_batch.row), np.asarray(sp_batch.col))),\
+               sp_batch.data,\
+               sp_batch.shape,\
                labels
 
 if __name__ == "__main__":

@@ -4,485 +4,204 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import argparse
-import sys
-import time
-import sys
-import os.path
+import itertools
 
 # Data
-import read_data_fedex as rdf
+import pickle
+import pandas as pd
 
+import numpy as np
 import math
 import tensorflow as tf
 
-FLAGS = None
+PATH_TO_DATA = "/Users/Louis/PycharmProjects/policy_approximation/DATA/fedex_pc_cleaned_no_0.data"
+data_index = 0
 
-# Load data
-NUM_CLASSES = 16077     # 46521
-ENTRIES_FEAT = NUM_CLASSES  #  input are of the same shape as output
+# Data prep
+# Location to ID lookup and vice-versa
+with open("DATA/postal_codes_fedex", 'rb') as f:
+    id_to_pc = pickle.load(f)
 
+pc_to_id = {j:i for i, j in enumerate(id_to_pc)}
 
-# ----------------------------------------------------------------------
-#
-#       Collect Data
-#
-# ----------------------------------------------------------------------
+# print(id_to_pc[1])
+# print(pc_to_id[10003])
 
-def variable_summaries(var):
-    """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
-    with tf.name_scope('summaries'):
-        mean = tf.reduce_mean(var)
-        tf.summary.scalar('mean', mean)
-        with tf.name_scope('stddev'):
-            stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
-        tf.summary.scalar('stddev', stddev)
-        tf.summary.scalar('max', tf.reduce_max(var))
-        tf.summary.scalar('min', tf.reduce_min(var))
-        tf.summary.histogram('histogram', var)
-
-# ----------------------------------------------------------------------
-#
-#       BUILD THE GRAPH
-#
-# ----------------------------------------------------------------------
-
-
-def inference(entries, hidden_unit):
+# "sentences" of locations
+def get_context_target(window):
     """
-    Build the graph for inference only.
-    :param entries, placeholder from inputs HERE should be of shape [batch_size, 1]
-    :param hidden_unit, placeholder
-
-    :return: softmax_linear, output logits
+    Function used to generate the data for the locations vectorial representation (skip_gram_locations.npz)
+    :param window, integer. Gives the number of preceding words giving the context of the target word
+    :return:
     """
-    # TODO: after modifying placeholder_inputs, assemble indices, values and shape into a sparse matrix HERE
-    with tf.name_scope('embeddings'):
-
-        embeddings = tf.Variable(tf.random_uniform([NUM_CLASSES, FLAGS.embed_size], -1.0, 1.0),
-                                 name="embeddings"
-                                 )
-        variable_summaries(embeddings)
-
-        embed = tf.nn.embedding_lookup(embeddings, entries)
-        print('embedding shape %s' % (embed.get_shape().as_list()))
-
-    with tf.name_scope('softmax'):
-
-        softmax_weights_t = tf.Variable(tf.truncated_normal([NUM_CLASSES, FLAGS.embed_size],
-                                                            stddev=1.0 / math.sqrt(FLAGS.embed_size),
-                                                            name='softmax_weights')
-                                      )
-        softmax_biases = tf.Variable(tf.zeros([NUM_CLASSES]),
-                                     name='softmax_biases')
-
-        return softmax_weights_t, softmax_biases, embed
-
-        #  previous solution for classic softmax: to be reused for evaluation
-
-
-def loss(softmax_w_t, softmax_biases, output, labels):
-    """Calculates the loss from the logits and the labels.
-    Args:
-    softmax_w:  tensor, float - weights of the sampled softmax [hidden_unit, NUM_CLASSES].
-    softmax_biases:  tensor, float - biases of the sampled softmax [NUM_CLASSES].
-    ouput: tensor, output of hidden layer
-    Returns:
-    loss: Loss tensor of type float.
-    """
-    softmax_loss = tf.nn.sampled_softmax_loss(weights=tf.cast(softmax_w_t, tf.float32),
-                                              biases=tf.cast(softmax_biases, tf.float32),
-                                              labels=tf.reshape(tf.to_int64(labels), [-1, 1]),
-                                              inputs=tf.cast(output, tf.float32),
-                                              num_sampled=256,
-                                              num_classes=NUM_CLASSES)
-    # TODO reduce_sum instead if NaN appears
-    return tf.reduce_mean(softmax_loss, name='xentropy_mean')
-
-
-def training(loss, learning_rate):
-    """Sets up the training Ops.
-    Creates a summarizer to track the loss over time in TensorBoard.
-    Creates an optimizer and applies the gradients to all trainable variables.
-    The Op returned by this function is what must be passed to the
-    `sess.run()` call to cause the model to train.
-    Args:
-    loss: Loss tensor, from loss().
-    learning_rate: The learning rate to use for gradient descent.
-    Returns:
-    train_op: The Op for training.
-    """
-    # Add a scalar summary for the snapshot loss.
-    tf.summary.scalar('loss', loss)
-    # Create the gradient descent optimizer with the given learning rate.
-    optimizer = tf.train.AdamOptimizer()  # we trust default parameters, no learning_rate
-    # optimizer = tf.train.GradientDescentOptimizer(learning_rate)
-
-    # Create a variable to track the global step.
-    global_step = tf.Variable(
-        0,
-        name='global_step',
-        trainable=False
+    raw_data = pd.read_csv(
+        PATH_TO_DATA,
+        header=0,
+        delim_whitespace=True
     )
-    # Use the optimizer to apply the gradients that minimize the loss
-    # (and also increment the global step counter) as a single training step.
-    train_op = optimizer.minimize(loss, global_step=global_step)
 
-    return train_op
+    print(len(set(raw_data['PostalCode'][:90000])))
 
+    stop_order_col = raw_data["StopOrder"]  # stop order column
+    start_tour_indices = list(stop_order_col[stop_order_col == 1 ].index)  # start of tours indices
+    range_tour = [1, len(start_tour_indices)-1]  # tours collected
+    print(start_tour_indices)
 
-def evaluation(logits, labels):
-    # TODO Use this function with k greater than 1 to evaluate more generally your net's behavior
-    """Evaluate the quality of the logits at predicting the label.
-    Args:
-    logits: Logits tensor, float - [batch_size, embed_size].
-    labels: Labels tensor, int32 - [batch_size], with values in the
-      range [0, NUM_CLASSES).
-    Returns:
-    A scalar int32 tensor with the number of examples (out of batch_size)
-    that were predicted correctly.
-    """
-    # For a classifier model, we can use the in_top_k Op.
-    # It returns a bool tensor with shape [batch_size] that is true for
-    # the examples where the label is in the top k (here k=1)
-    # of all logits for that example.
+    context_words = []
+    target_word = []
 
-    # return softmax_weights_t, softmax_biases, embed
-    correct = tf.nn.in_top_k(tf.matmul(logits[2], tf.transpose(logits[0])) + logits[1], labels, 1)
-    # Return the number of true entries.
-    return tf.reduce_sum(tf.cast(correct, tf.int32))
-
-# ----------------------------------------------------------------------
-#
-#       TRAIN THE MODEL
-#
-# ----------------------------------------------------------------------
-
-
-def placeholder_inputs(batch_size):
-    """Generate placeholder variables to represent the input tensors.
-    These placeholders are used as inputs by the rest of the model building
-    code and will be fed from the downloaded data in the .run() loop, below.
-    Args:
-    batch_size: The batch size will be baked into both placeholders.
-    Returns:
-    entries_placeholder: entries placeholder.
-    labels_placeholder: Labels placeholder.
-    """
-    # Note that the shapes of the placeholders match the shapes of the full
-    # image and label tensors, except the first dimension is now batch_size
-    # rather than the full size of the train or test data sets.
-    with tf.name_scope('input'):
-        # TODO replace entries_placeholder by 3 placeholders: indices, values and shape
-        entries_placeholder = tf.placeholder(tf.float32,
-                                             shape=(batch_size, NUM_CLASSES),
-                                             name='input-entries'
-                                             )
-
-        # to be used when implementing sparse computations
-        # indices_placeholder = tf.placeholder(tf.int64)
-        # values_placeholder = tf.placeholder(tf.float32)
-        # shape_placeholder = tf.placeholder(tf.int32)
-
-        labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size), name="y-input")
-    return entries_placeholder, labels_placeholder
-
-
-def fill_feed_dict(data_set, entries_pl, labels_pl):
-    # TODO are you sure of dataset's type?
-    """Fills the feed_dict for training the given step.
-    A feed_dict takes the form of:
-    feed_dict = {
-      <placeholder>: <tensor of values to be passed for placeholder>,
-      ....
-    }
-    Args:
-    data_set: Dataset() object
-    entries_pl: The entries placeholder, from placeholder_inputs().
-    labels_pl: The labels placeholder, from placeholder_inputs().
-    Returns:
-    feed_dict: The feed dictionary mapping from placeholders to values.
-    """
-    # Create the feed_dict for the placeholders filled with the next
-    # `batch size` examples.
-    # TODO: after creating placeholders, transform entries_feed into COO coordinates and adapt the feed dictionary !!
-    entries_feed, labels_feed = data_set.next_batch(FLAGS.batch_size)
-    # entries_feed = tf.constant(entries_feed)
-    # idx = tf.where(tf.not_equal(entries_feed, 0))
-    # entries_feed = tf.SparseTensor(idx, tf.gather_nd(entries_feed, idx),entries_feed.get_shape())
-
-    feed_dict = {
-      entries_pl: entries_feed,
-      labels_pl: labels_feed,
-    }
-    return feed_dict
-
-
-def do_eval(sess,
-            eval_correct,
-            entries_placeholder,
-            labels_placeholder,
-            data_set
+    for start, end in itertools.zip_longest(
+                    start_tour_indices[range_tour[0]-1:range_tour[1]],
+                    start_tour_indices[range_tour[0]:range_tour[1]+1],
+                    fillvalue=0
             ):
-    """Runs one evaluation against the full epoch of data.
-    Args:
-    sess: The session in which the model has been trained.
-    eval_correct: The Tensor that returns the number of correct predictions.
-    entries_placeholder: The entries placeholder.
-    labels_placeholder: The labels placeholder.
-    data_set: The set of entries and labels to evaluate, from
-      Dataset().
+
+        # retrieve sentence
+        sentence = list(raw_data['PostalCode'][start:end])
+        len_sentence = len(sentence)
+
+        for i in range(window, len_sentence):
+            for j in range(1, window+1):
+                context_words.append(pc_to_id[sentence[i-j]])
+                target_word.append(pc_to_id[sentence[i]])  # label of sentence[i-j]
+
+    # print(context_words[:10])
+    # print(target_word[:10])
+    # print(len(target_word)/2)
+    # print(id_to_pc[target_word[17]])
 
     """
-    # And run one epoch of eval.
-    true_count = 0  # Counts the number of correct predictions.
-    # TODO reassign on the correct amount of entries_train you want to evaluate your network
-    steps_per_epoch = data_set.num_examples // FLAGS.batch_size
-    num_examples = steps_per_epoch * FLAGS.batch_size
-    for step in range(steps_per_epoch):
-        feed_dict = fill_feed_dict(data_set,
-                                   entries_placeholder,
-                                   labels_placeholder
-                                   )
-        true_count += sess.run(eval_correct, feed_dict=feed_dict)
-    precision = float(true_count) / num_examples
-    print('  Num examples: %d  Num correct: %d  Precision @ 1: %0.04f' %
-          (num_examples, true_count, precision))
+    np.savez_compressed('/Users/Louis/PycharmProjects/policy_approximation/DATA/skip_gram_locations',
+                        context=context_words,
+                        target=target_word
+                        )
+    """
 
 
-def run_training():
-    """Train MNIST for a number of steps."""
-    # Get the sets of entries and labels for training and Test
-    whole_data = rdf.ReadDataFedex()
-    percentage_training = 0.7
-    num_examples = whole_data.num_examples
+def generate_batch(btch_size, ctxt, target):
+    global data_index
+    nb_samples = len(target)
+    assert data_index < nb_samples
 
-    # Train and test data
-    train_entries = whole_data.entries[:math.floor(percentage_training*num_examples)]
-    train_labels = whole_data.labels[:math.floor(percentage_training*num_examples)]
+    if data_index > nb_samples - btch_size:  # end of epoch
+        batch = np.asarray(ctxt[data_index:])
+        labels = np.asarray(target[data_index:])
+        print(data_index)
+        print("before append", batch)
+        batch = np.append(batch, context[0:(batch_size - (nb_samples - data_index))])
+        labels = np.append(labels, target[0:(batch_size - (nb_samples - data_index))])
+        print("after append", batch)
+        print("should append ", context[0:(batch_size - (nb_samples - data_index))] )
 
-    test_entries = whole_data.entries[math.floor(percentage_training*num_examples):]
-    test_labels = whole_data.labels[math.floor(percentage_training * num_examples):]
+        print("Epoch completed")
+        data_index = ((data_index + btch_size) % nb_samples) - 1  # new epoch
 
-    data_set_train = rdf.Dataset(train_entries, train_labels)
-    data_set_test = rdf.Dataset(test_entries, test_labels)
+    else:
+        batch = context[data_index:data_index + btch_size]
+        labels = target[data_index:data_index + btch_size]
+        data_index += (btch_size + 1)
 
-    # Tell TensorFlow that the model will be built into the default Graph.
+    return batch, np.reshape(labels, (btch_size, 1))
 
-    with tf.Graph().as_default():
-        # Generate placeholders for the entries and labels.
-        entries_placeholder, labels_placeholder = placeholder_inputs(
-            FLAGS.batch_size
+if __name__ == "__main__":
+
+    # From 2 word skip gram
+    # embeddings characteristics
+    raw_data = pd.read_csv(
+        PATH_TO_DATA,
+        header=0,
+        delim_whitespace=True
+    )
+    vocabulary_size = len(set(raw_data['PostalCode']))
+    print("Vocab size ", vocabulary_size)
+
+    loaded = np.load('DATA/skip_gram_locations.npz')
+    context = np.asarray(loaded['context'])
+    target_word = np.asarray(loaded['target'])
+    print(len(target_word))
+
+    num_samples = len(context)
+    embedding_size = 128
+    batch_size = 10
+
+    # We pick a random validation set to sample nearest neighbors. Here we limit the
+    # validation samples to the words that have a low numeric ID, which by
+    # construction are also the most frequent.
+    valid_size = 16  # Random set of words to evaluate similarity on.
+    valid_window = 100  # Only pick dev samples in the head of the distribution.
+    valid_examples = np.random.choice(valid_window, valid_size, replace=False)
+    num_sampled = 64  # Number of negative examples to sample.
+
+    graph = tf.Graph()
+    with graph.as_default():
+        # Placeholders for inputs
+        train_inputs = tf.placeholder(tf.int32, shape=[batch_size])
+        train_labels = tf.placeholder(tf.int32, shape=[batch_size, 1])
+        valid_dataset = tf.constant(valid_examples, dtype=tf.int32)
+
+        # Look up embeddings for inputs.
+        embeddings = tf.Variable(
+            tf.random_uniform([vocabulary_size, embedding_size], -1.0, 1.0))
+
+        nce_weights = tf.Variable(
+            tf.truncated_normal([vocabulary_size, embedding_size],
+                                stddev=1.0 / math.sqrt(embedding_size)))
+        nce_biases = tf.Variable(tf.zeros([vocabulary_size]))
+
+        embed = tf.nn.embedding_lookup(embeddings, train_inputs)
+
+        # Compute the NCE loss, using a sample of the negative labels each time.
+        loss = tf.reduce_mean(
+            tf.nn.nce_loss(weights=nce_weights,
+                           biases=nce_biases,
+                           labels=train_labels,
+                           inputs=embed,
+                           num_sampled=num_sampled,
+                           num_classes=vocabulary_size)
         )
 
-        # Build a Graph that computes predictions from the inference model.
-        logits = inference(entries_placeholder,
-                           FLAGS.hidden
-                           )
+        # We use the SGD optimizer.
+        optimizer = tf.train.GradientDescentOptimizer(learning_rate=.1).minimize(loss)
 
-        # Add to the Graph the Ops for loss calculation.
-        # loss(softmax_w_t, softmax_biases, output, labels)
-        loss_ = loss(logits[0], logits[1], logits[2], labels_placeholder)
+        # Compute the cosine similarity between minibatch examples and all embeddings.
+        norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keep_dims=True))
+        normalized_embeddings = embeddings / norm
+        valid_embeddings = tf.nn.embedding_lookup(
+            normalized_embeddings, valid_dataset)
+        similarity = tf.matmul(
+            valid_embeddings, normalized_embeddings, transpose_b=True)
 
-        # Add to the Graph the Ops that calculate and apply gradients.
-        train_op = training(loss_, FLAGS.learning_rate)
-
-        # Add the Op to compare the logits to the labels during evaluation.
-        eval_correct = evaluation(logits, labels_placeholder)
-
-        # Build the summary Tensor based on the TF collection of Summaries.
-        summary = tf.summary.merge_all()
-
-        # Add the variable initializer Op.
+        # Add variable initializer.
         init = tf.global_variables_initializer()
 
-        # TODO explore the possibility of creating check points
-        """
-        # Create a saver for writing training checkpoints.
-        saver = tf.train.Saver()
-        """
+    # Begin training.
+    num_steps = 100001
+    with tf.Session(graph=graph) as session:
+        # We must initialize all variables before we use them.
+        init.run()
+        print('Initialized')
 
-        # Create a session for running Ops on the Graph.
-        sess = tf.Session()
+        average_loss = 0
+        for step in range(num_steps):
+            batch_inputs, batch_labels = generate_batch(
+                batch_size,
+                context,
+                target_word
+            )
+            feed_dict = {train_inputs: batch_inputs, train_labels: batch_labels}
 
-        # Instantiate a SummaryWriter to output summaries and the Graph.
-        summary_writer = tf.summary.FileWriter(FLAGS.log_dir, sess.graph)
+            # We perform one update step by evaluating the optimizer op (including it
+            # in the list of returned values for session.run()
+            _, loss_val = session.run([optimizer, loss], feed_dict=feed_dict)
+            average_loss += loss_val
 
-        # And then after everything is built:
-
-        # Run the Op to initialize the variables.
-        sess.run(init)
-
-        # Start the training loop.
-
-        for step in range(FLAGS.max_steps):
-            start_time = time.time()
-
-            # Fill a feed dictionary with the actual set of entries and labels
-            # for this particular training step.
-            feed_dict = fill_feed_dict(data_set_train,
-                                       entries_placeholder,
-                                       labels_placeholder
-                                       )
-
-            # Run one step of the model.  The return values are the activations
-            # from the `train_op` (which is discarded) and the `loss` Op.  To
-            # inspect the values of your Ops or variables, you may include them
-            # in the list passed to sess.run() and the value tensors will be
-            # returned in the tuple from the call.
-            _, loss_value = sess.run([train_op, loss_],
-                                     feed_dict=feed_dict
-                                     )
-
-            duration = time.time() - start_time
-
-            # Write the summaries and print an overview fairly often.
-            full_test = [1000, 5000]
-            if step % 100 == 0 and step not in full_test:
-                # Print status to stdout.
-                print('-- Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
-                # Update the events file.
-                summary_str = sess.run(summary, feed_dict=feed_dict)
-                summary_writer.add_summary(summary_str, step)
-                summary_writer.flush()
-
-            elif step in full_test:
-                # Print status to stdout.
-                print('-- Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
-                # Update the events file.
-                summary_str = sess.run(summary, feed_dict=feed_dict)
-                summary_writer.add_summary(summary_str, step)
-                summary_writer.flush()
-
-                """
-                # Save a checkpoint and evaluate the model periodically.
-                if (step + 1) % 1000 == 0 or (step + 1) == FLAGS.max_steps:
-                    checkpoint_file = os.path.join(FLAGS.log_dir,
-                                                   'model.ckpt'
-                                                   )
-                saver.save(sess, checkpoint_file, global_step=step)
-                """
-                # Evaluate against the training set.
-                print('Training Data Eval:')
-                do_eval(sess,
-                        eval_correct,
-                        entries_placeholder,
-                        labels_placeholder,
-                        data_set_train)
-
-                # TODO no validation set yet
-                # Evaluate against the test set.
-                print('Test Data Eval:')
-                do_eval(sess,
-                        eval_correct,
-                        entries_placeholder,
-                        labels_placeholder,
-                        data_set_test
-                        )
-
-    # TODO 5) Read up on SSE4.2 Instructions and GPU computations too
-    # TODO 6) Only after having real performance results, you will use a more complex model (RNN for instance)
+            if step % 2000 == 0:
+                if step > 0:
+                    average_loss /= 2000
+                # The average loss is an estimate of the loss over the last 2000 batches.
+                print(loss_val)
+                print('Average loss at step ', step, ': ', average_loss)
+                average_loss = 0
 
 
-def main(_):
-    if tf.gfile.Exists(FLAGS.log_dir):
-        tf.gfile.DeleteRecursively(FLAGS.log_dir)
-    tf.gfile.MakeDirs(FLAGS.log_dir)
-    run_training()
 
-if __name__ == '__main__':
-
-    parser = argparse.ArgumentParser()
-
-    # Percentage for training
-    parser.add_argument(
-        '--percentage_train',
-        type=float,
-        default=0.7,
-        help='Percentage of data used for training.'
-    )
-
-    # Learning rate command line
-    parser.add_argument(
-        '--learning_rate',
-        type=float,
-        default=0.01,
-        help='Initial learning rate.'
-    )
-
-    # Max steps
-    parser.add_argument(
-        '--max_steps',
-        type=int,
-        default=6000,
-        help='Number of steps to run trainer.'
-    )
-
-    # Number of hidden units
-    # TODO nb of units is too low here
-    parser.add_argument(
-        '--hidden',
-        type=int,
-        default=1000,
-        help='Number of units in hidden layer 1.'
-    )
-
-    # Batch size
-    # TODO maybe do not evenly divide dataset...
-    parser.add_argument(
-        '--batch_size',
-        type=int,
-        default=30,
-        help='Batch size.  Must divide evenly into the dataset sizes.'
-    )
-
-    # input data dir
-    if sys.platform == 'darwin':
-        parser.add_argument(
-            '--input_data_dir',
-            type=str,
-            default='/Users/Louis/PycharmProjects/policy_approximation/',
-            help='Directory to put the input data.'
-        )
-    elif sys.platform == 'linux':
-        parser.add_argument(
-            '--input_data_dir',
-            type=str,
-            default='/home/louis/Documents/Research/policy_approximation-master/logs',
-            help='Directory to put the input data.'
-        )
-
-    # logs location
-    if sys.platform == 'darwin':
-        parser.add_argument(
-            '--log_dir',
-            type=str,
-            default='/Users/Louis/PycharmProjects/policy_approximation/logs/sampled_softmax_logs/non_sparse_experiment_30btch_2',
-            help='Directory to put the log data.'
-        )
-
-    elif sys.platform == 'linux':
-        parser.add_argument(
-            '--log_dir',
-            type=str,
-            default='/home/Research/policy_approximation/logs/sampled_softmax_logs/non_sparse_experiment_30btch',
-            help='Directory to put the log data.'
-        )
-
-    if sys.platform == 'darwin':
-        parser.add_argument(
-            '--embed_size',
-            type=str,
-            default=128,
-            help='Dimension of embeddings'
-        )
-
-    elif sys.platform == 'linux':
-        parser.add_argument(
-            '--embed_size',
-            type=str,
-            default=128,
-            help='Dimensions of embeddings.'
-        )
-    FLAGS, unparsed = parser.parse_known_args()
-    tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
