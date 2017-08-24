@@ -20,7 +20,7 @@ import tensorflow as tf
 FLAGS = None
 
 # Load data
-NUM_CLASSES = 16077 # 46521
+NUM_CLASSES = 37 # 16077 # 46521
 ENTRIES_FEAT = NUM_CLASSES  #  input are of the same shape as output
 
 # TODO: to speed up computations: 1/ Improve the stream of data (no conversion from dense to sparse) => not mandatory?

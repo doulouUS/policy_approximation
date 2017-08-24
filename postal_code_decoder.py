@@ -2,20 +2,13 @@ import pandas as pd
 import numpy as np
 import pickle
 # import geocoder
-import requests
-
-# Mapping
-from bokeh.io import output_file, show
-from bokeh.models import (
-  GMapPlot, GMapOptions, ColumnDataSource, Circle, DataRange1d, PanTool, WheelZoomTool, BoxSelectTool
-)
+# from read_data_fedex import visualize_postal_code as viz
 
 PATH_TO_DATA = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/dynamics/demand_models/fedex.data"
 PATH_TO_ADDRESSES = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/gym_foo/envs/addresses.fedex"
 
 # API Google
-API_key = "AIzaSyCXPGUPh1D31z7aQew0RCxwSopLSv0GNYw"
-API_web_viz = "AIzaSyApMtNEiMXlpRju4TR8my3lK_0tG-VafPU"
+API_key = "AIzaSyD43dQWWhc8lfg5ybgqK__nEpSU5zFmnyI"
 url = "https://maps.googleapis.com/maps/api/geocode/json?"
 
 
@@ -132,9 +125,11 @@ def cleaner(raw_data):
         print("Error, nb of attempted retrieved pc do not match nb of wrong postal code")
         return 0
 
+
 if __name__ == "__main__":
     PATH_TO_POSTAL_CODE = "/Users/Louis/PycharmProjects/policy_approximation/DATA/postal_codes_2_fedex"
-    # TODO: retrieve geocode for the next batch 2000-4000 => poor results...
+
+    # TODO: retrieve geocode for the next batch 0-2000 => poor results...
     # Location to ID lookup and vice-versa
     with open("DATA/postal_codes_fedex", 'rb') as f:
         id_to_pc = pickle.load(f)
@@ -145,7 +140,7 @@ if __name__ == "__main__":
 
     increase_pc_list = sorted(pc_to_id.keys())
     print("Total postal code to retrieve ", len(increase_pc_list))
-    pc_l1 = increase_pc_list[0:2000]  # day 1 of stealing google
+    pc_l1 = increase_pc_list[2001:4000]  # day 2 of stealing google
 
     pc_to_coords = {}  # store results with a dict {postalcode : {'lng': ?? , 'lat' : ??}}
     count_err = 0
@@ -153,14 +148,15 @@ if __name__ == "__main__":
 
         params = { "address" : "Singapore " + str(postal_code),
                    "sensor" : "false",
-                   "region" : ".sg",
-                   'key' : API_key
+                   "region" : "SG",
+                    'key' : API_key
                   }
         try:
             results = requests.get(
                 url,
                 params=params
             ).json()
+
 
             # append coords at the postal code
             pc_to_coords[postal_code] = {
@@ -173,44 +169,20 @@ if __name__ == "__main__":
             count_err += 1
 
     # save pc_to_coords
-    with open('/Users/Louis/PycharmProjects/policy_approximation/DATA/pc_to_coordinates/pc_to_coord_0_2000', "wb") as f:
+    with open('/Users/Louis/PycharmProjects/policy_approximation/DATA/pc_to_coordinates/pc_to_coord_2001_4000', "wb") as f:
         pickle.dump(pc_to_coords, f)
 
     print("Number of errors while retrieving coordinates: ", count_err)
 
+    """
     # TODO: regroup this in a function in order to plot easily on the same map different color point
     # --------------------- VISUALIZATION -----------------------------
     # input: postal codes, color (to differentiate addresses nature)
     with open('/Users/Louis/PycharmProjects/policy_approximation/DATA/pc_to_coordinates/pc_to_coord_0_2000', "rb") as f:
         pc_to_coord = pickle.load(f)
 
-    print(pc_to_coord)
+    lat = [pc_to_coord[i]['lat'] for i in pc_to_coord]
+    lng = [pc_to_coord[i]['lng'] for i in pc_to_coord]
 
-    map_options = GMapOptions(lat=1.29, lng=103.8, map_type="roadmap", zoom=11)
-
-    plot = GMapPlot(
-        x_range=DataRange1d(), y_range=DataRange1d(), map_options=map_options
-    )
-    plot.title.text = "Singapore"
-
-    # For GMaps to function, Google requires you obtain and enable an API key:
-    #
-    #     https://developers.google.com/maps/documentation/javascript/get-api-key
-    #
-    # Replace the value below with your personal API key:
-    plot.api_key = API_web_viz
-    keys = list(pc_to_coord.keys())[0:1000]
-    source = ColumnDataSource(
-        data=dict(
-            lat=[pc_to_coord[p]['lat'] for p in keys],
-            lon=[pc_to_coord[p]['lng'] for p in keys],
-        )
-    )
-
-    circle = Circle(x="lon", y="lat", size=15, fill_color="blue", fill_alpha=0.8, line_color=None)
-    plot.add_glyph(source, circle)
-
-    plot.add_tools(PanTool(), WheelZoomTool(), BoxSelectTool())
-    # output_file("gmap_plot.html")
-    show(plot)
-
+    viz(lat, lng)
+    """

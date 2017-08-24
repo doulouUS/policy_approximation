@@ -31,7 +31,7 @@ def freeze_graph(model_folder):
     # input_checkpoint = "/Users/Louis/PycharmProjects/policy_approximation/trained_graph/model.ckpt-200000"
 
     # We precise the file fullname of our freezed graph
-    absolute_model_folder = "/Users/Louis/PycharmProjects/policy_approximation/trained_graph"
+    absolute_model_folder = "Users/Louis/PycharmProjects/policy_approximation/trained_graph"
     output_graph = absolute_model_folder + "/frozen_model.pb"
 
     # Before exporting our graph, we need to precise what is our output node
@@ -94,6 +94,29 @@ def load_graph(frozen_graph_filename):
     return graph
 
 
+def retrieve_matrix(input_checkpoint, output_node_name):
+    # TODO: generalize if you want to retrieve several matrices
+    """
+    Extract
+    :param input_checkpoint: str, path to ckpt file
+    :param output_node_names: str, node name of the matrix to be retrieved
+    :return:
+    """
+    saver = tf.train.import_meta_graph(
+        input_checkpoint + ".meta",
+        clear_devices=True
+    )
+    # We retrieve the protobuf graph definition
+    graph = tf.get_default_graph()
+
+    # input_graph_def = graph.as_graph_def()
+
+    with tf.Session() as sess:
+        saver.restore(sess, input_checkpoint)
+        matrix = np.asarray(sess.run(output_node_name+":0"))  # /!\ add :0 after name...
+
+    return matrix
+
 if __name__ == '__main__':
 
     """
@@ -114,28 +137,28 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # We use our "load_graph" function
-    graph = load_graph(args.frozen_model_filename)
+    graph_ = load_graph(args.frozen_model_filename)
 
     # Retrieve inputs and desired outputs
-    indices_pl = graph.get_operation_by_name('prefix/input/Placeholder').outputs[0]
-    values_pl = graph.get_operation_by_name('prefix/input/Placeholder_1').outputs[0]
-    shape_pl = graph.get_operation_by_name('prefix/input/Placeholder_2').outputs[0]
+    indices_pl = graph_.get_operation_by_name('prefix/input/Placeholder').outputs[0]
+    values_pl = graph_.get_operation_by_name('prefix/input/Placeholder_1').outputs[0]
+    shape_pl = graph_.get_operation_by_name('prefix/input/Placeholder_2').outputs[0]
 
-    logits = graph.get_operation_by_name('prefix/softmax_linear/add').outputs[0]
-    prediction  = tf.argmax(logits, axis=1)
+    logits = graph_.get_operation_by_name('prefix/softmax_linear/add').outputs[0]
+    prediction = tf.argmax(logits, axis=1)
 
     # Data generation
     whole_data = ReadDataFedex()
     percentage_training = 0.7
     num_examples = whole_data.num_examples
 
-    test_entries = whole_data.entries[:math.floor(percentage_training*num_examples)]
-    test_labels = whole_data.labels[:math.floor(percentage_training * num_examples):]
+    test_entries = whole_data.entries[math.floor(percentage_training*num_examples):]
+    test_labels = whole_data.labels[math.floor(percentage_training * num_examples):]
 
     data_set_test = Dataset(test_entries, test_labels)
 
     indices_feed, values_feed, shape_feed, labels_feed = data_set_test.next_sp_batch(
-        math.floor(0.7*num_examples -1),
+        math.floor(0.3*num_examples) -1,
         shuffle=False
     )
 

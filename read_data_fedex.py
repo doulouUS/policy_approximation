@@ -5,6 +5,23 @@ import itertools
 import time
 import sys
 from scipy.sparse.coo import coo_matrix
+from matplotlib import pyplot
+import matplotlib as mpl
+# Mapping
+from bokeh.io import output_file, show
+from bokeh.models import (
+  GMapPlot, GMapOptions, ColumnDataSource, Circle, DataRange1d, PanTool, WheelZoomTool, BoxSelectTool, Line
+)
+from bokeh.palettes import inferno
+
+import tensorflow as tf
+from tensorflow.python.framework import graph_util
+from scipy.spatial.distance import pdist
+
+# Homemade modules
+import sys
+sys.path.insert(0, '/Users/Louis/PycharmProjects/policy_approximation')
+# import tf_model_handling_toolbox as tf_model
 
 if sys.platform == 'darwin':
 
@@ -27,9 +44,9 @@ def postal_code_to_ID(postal_code):
     :return:
     """
     with open(PATH_TO_POSTAL_CODE, "rb") as f:
-        pcodes = pickle.load(f)
+        int_to_post_code = pickle.load(f)
 
-    return pcodes.index(postal_code)  # index == ID !, unique if postal_codes.fedex correctly generated!
+    return int_to_post_code.index(postal_code)  # index == ID !, unique if postal_codes.fedex correctly generated!
 
 class Datasets:
     """
@@ -150,11 +167,11 @@ class Datasets:
 
         # encode postal codes
         with open(PATH_TO_POSTAL_CODE, "rb") as f:
-            pcodes = pickle.load(f)  # pcodes[int] gives the postal code encoded by int
+            int_to_post_code = pickle.load(f)  # int_to_post_code[int] gives the postal code encoded by int
 
-        post_code_to_int = dict((c, i) for c, i in zip(pcodes, range(0, len(pcodes))))
+        post_code_to_int = dict((c, i) for c, i in zip(int_to_post_code, range(0, len(int_to_post_code))))
 
-        array_line = 0
+        array_line = 0  # keep track of the row position in the raw data
         print("Start retrieving sparse values")
         for start, end in itertools.zip_longest(
                 self.start_tour_idx[range_tour[0]-1:range_tour[1]],
@@ -284,6 +301,7 @@ class ReadDataFedex:
         """
 
         :param mode: string, "dense" (for entries and labels) or "sparse" (for indices, values and labels)
+        :param specific_entries, list of int, specifies which rows to take from the whole data
         """
 
         print("____________________________________________________________________________")
@@ -327,7 +345,7 @@ class Dataset:
     def __init__(self, entries, labels):
         """
 
-        :param percentage: percentage, float. Proportion of dataset used for training
+        :param entries, np array samples*features
         """
 
         # to follow training
@@ -419,25 +437,276 @@ class Dataset:
                sp_batch.shape,\
                labels
 
+
+# BOKEH MAP
+def initialize_map(title="Singapore", lat=1.29, lng=103.8, maptype="roadmap", zoom=11):
+    """
+    Bokeh map initialization for visualization
+
+    :param title: str
+    :param lat: float
+    :param lng: float
+    :param maptype: str
+    :param zoom: int
+    :return: plot
+    """
+    map_options = GMapOptions(lat=lat, lng=lng, map_type=maptype, zoom=zoom)
+
+    plot = GMapPlot(
+        x_range=DataRange1d(), y_range=DataRange1d(), map_options=map_options
+    )
+    plot.title.text = title
+    plot.api_key = "AIzaSyApMtNEiMXlpRju4TR8my3lK_0tG-VafPU"
+
+    return plot
+
+
+def add_point_on_map(lat, lng, plot, color="blue"):
+    """
+    Plot lat and long
+    :param lat: list of float
+    :param lng: list of float, same size as lat
+    :return:
+    """
+    if len(lat) != len(lng):
+        raise ValueError('latitude and longitude lists should be of same size.')
+
+    source = ColumnDataSource(
+        data=dict(
+            lat=lat,
+            lon=lng,
+        )
+    )
+    circle = Circle(x="lon", y="lat", size=8, fill_color=color, fill_alpha=0.8, line_color=None)
+    plot.add_glyph(source, circle)
+
+
+def add_line_on_map(lat, lng, plot, color="black"):
+    """
+    Plot lat and long
+    :param lat: list of float
+    :param lng: list of float, same size as lat
+    :return:
+    """
+    if len(lat) != len(lng):
+        raise ValueError('latitude and longitude lists should be of same size.')
+
+    source = ColumnDataSource(
+        data=dict(
+            lat=lat,
+            lon=lng,
+        )
+    )
+    line = Line(x="lon", y="lat", line_color=color)
+    plot.add_glyph(source, line)
+
+
+def show_map(plot):
+    """
+    Show map with widgets, possible to generate html
+    :return:
+    """
+    # Add widgets
+    plot.add_tools(PanTool(), WheelZoomTool(), BoxSelectTool())
+    # output_file("gmap_plot.html")
+    show(plot)
+
+
+def data_prep_2nd_attempt():
+
+    raw_data = pd.read_csv(
+        PATH_TO_DATA,
+        header=0,
+        delim_whitespace=True
+    )
+    # FIRST CANDIDATE: /!\ Pb it is only deliveries /!\
+    # Truck               976220
+    # 1 region: ["Latitude"] < 1.3463879115 and ["Longitude"] > 103.8965034485
+    # 554 postal code in this region
+    # 901 samples
+    # 12 tours in a month
+
+    # SECOND CANDIDATE
+    # Truck        868386
+    # 1 region  ["Latitude"] < 1.31216860 and ["Longitude"] > 103.78200827 and ["Longitude"] < 103.8705063913
+    # postal codes?
+    # 757 samples - 395 deliveries
+    # 37 postal codes
+    # 11 tours
+
+    # Data to be built
+    indices = []
+    values = []
+    shape_count = 0
+
+    indices_label = []
+    values_label = []
+
+    data = raw_data[raw_data["FedExID"] == 868386]
+    data = data[data["Latitude"] < 1.31216860]
+    data = data[data["Longitude"] > 103.78200827]
+    data = data[data["Longitude"] < 103.8705063913]
+    data_indices = list(data.index)
+
+    # postal code encoding
+    idx_to_pc = sorted(list(set(data["PostalCode"])))
+    pc_to_idx = {j: i for i, j in enumerate(idx_to_pc)}
+
+    # Find tours index
+    end_tour_index = []
+    for i, j in zip(data_indices, range(0, len(data_indices)-1)):
+        if data_indices[j+1] - i-1 > 10:
+            end_tour_index.append(i)
+    end_tour_index.append(data_indices[-1])
+
+    # retrieve for each entry, known jobs remaining to be done at the time of the entry in the current tour
+    for index, row in data.iterrows():
+        if index not in end_tour_index:
+            # current end tour index
+            tour = min(filter(lambda x: x > index, end_tour_index))
+            # remaining jobs in the tour
+            data_indices_tour = [i for i in data.index if index < i < tour+1]
+
+            # remaining deliv
+            rem = data.loc[data_indices_tour]
+            rem_deliv = list(rem[rem["ReadyTimePickup"] == 0000]["PostalCode"])
+
+            # remaining pickups, known at the current time
+            rem_pick = rem[rem["ReadyTimePickup"] != 0000]
+            rem_pick = list(rem_pick[rem_pick["ReadyTimePickup"] <= row["StopStartTime"]]["PostalCode"])
+
+            # current location
+            cur_loc = row["PostalCode"]
+
+            # decision (next row)
+            next_loc = data.loc[data_indices_tour[0]]
+            next_loc = next_loc["PostalCode"]
+
+            # encode locations
+            rem_deliv = [pc_to_idx[idx] for idx in rem_deliv]
+            rem_pick = [pc_to_idx[idx] for idx in rem_pick]
+            cur_loc = pc_to_idx[cur_loc]
+            next_loc = pc_to_idx[next_loc]
+
+            # build sparse elements
+            # indices
+            indices.extend([[shape_count, i] for i in rem_deliv])
+            indices.extend([[shape_count, i] for i in rem_pick])
+            indices.extend([[shape_count, cur_loc]])
+
+            values.extend([0.5]*len(rem_deliv))
+            values.extend([-0.5]*len(rem_pick))
+            values.extend([1])
+
+            # labels
+            indices_label.extend([[shape_count, next_loc]])
+            values_label.extend([1])
+
+            shape_count += 1
+
+    shape = [shape_count, len(set(data["PostalCode"]))]
+    print(shape)
+    return values, indices, values_label, indices_label, shape
+
+
 if __name__ == "__main__":
 
-    # this is looong
-    fedex = Datasets(PATH_TO_DATA, mode='postal_code')
-    np.savez_compressed("dataset_pc.fedex", inputs=fedex.entries, labels=fedex.labels)
-
-    """
     raw_data = pd.read_csv(
         PATH_TO_DATA,
         header=0,
         delim_whitespace=True
     )
 
-    postal_codes = list(sorted(set(list(raw_data["PostalCode"]))))
-    print(max(raw_data["PostalCode"]))
 
-    with open(PATH_TO_POSTAL_CODE, 'rb') as f:
-        pcodes = pickle.load(f)
+    """
+    values, indices, values_label, indices_label, shape = data_prep_2nd_attempt()
+    indices = np.asarray(indices)
+    rows = indices[:, 0]
+    columns = indices[:, 1]
+    print("Nb of columns ", len(columns))
+    print("Nb of rows ", len(rows))
+    dense_data = coo_matrix(values, (rows, columns)).todense()
 
-        print(len(pcodes))
+    # represent extract
+    # image = np.reshape(dense_data[0,:], (69,233))
     """
 
+    data = ReadDataFedex()
+    data = Dataset(data.entries, data.labels)
+    data_to_image, _ = data.next_batch(1, shuffle=True)
+    print("Shape data_to_image ", type(data_to_image))
+    image = np.reshape(data_to_image, (69,233))
+
+    # print this image...
+    # make a color map of fixed colors
+    cmap = mpl.colors.ListedColormap(['blue', 'black', 'red', 'orange'])
+    bounds = [-0.5, -0.3, 0.3, 0.8, 1.2]
+    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+
+    # tell imshow about color map so that only set colors are used
+    print("ee", image.shape)
+    img = pyplot.imshow(image, interpolation='nearest',
+                        cmap=cmap, norm=norm)
+
+    # make a color bar
+    pyplot.colorbar(img, cmap=cmap,
+                    norm=norm, boundaries=bounds, ticks=[-.5, 0, 1])
+
+    pyplot.show()
+
+
+    """
+    # Data of interest
+    raw_data = pd.read_csv(
+        PATH_TO_DATA,
+        header=0,
+        delim_whitespace=True
+    )
+    raw_data = raw_data[raw_data["FedExID"] == 868386]
+
+    # Encoder and decoder for postal codes
+    with open("/Users/Louis/PycharmProjects/policy_approximation/DATA/postal_codes_fedex", 'rb') as f:
+        id_to_pc = pickle.load(f)
+
+    pc_to_id = {j: i for i, j in enumerate(id_to_pc)}
+
+    # Embeddings
+    # We import the meta graph and retrieve a Saver
+    input_checkpoint = "/Users/Louis/PycharmProjects/policy_approximation/DATA/embeddings_validation/" \
+                       "log_10dim_10btch/model.ckpt-200000"
+
+    output_node_names = ["embeddings_de_dingue_postal_codes"]
+    embeddings = tf_model.retrieve_matrix(input_checkpoint, output_node_names[0])
+
+    # Find tours index
+    start_tour_index = []
+    end_tour_index = []
+
+    # ----------------------------- Index of the starting tours
+    data_indices = list(raw_data.index)
+    start_tour_index.append(data_indices[0])
+    for i, j in zip(data_indices, range(0, len(data_indices)-1)):
+        if data_indices[j+1] - i-1 > 10:
+            start_tour_index.append(data_indices[j+1])
+            end_tour_index.append(i)
+
+    end_tour_index.append(data_indices[-1])
+    print(start_tour_index)
+    tour_indices = [i for i in raw_data.index if start_tour_index[0] < i < end_tour_index[0] + 1]
+
+    # MAP making
+    plot = initialize_map()
+    colors = inferno(len(end_tour_index))
+    add_point_on_map(lat=raw_data.loc[tour_indices]['Latitude'],
+                     lng=raw_data.loc[tour_indices]['Longitude'],
+                     plot=plot
+                     )
+    add_line_on_map(lat=raw_data.loc[tour_indices]['Latitude'],
+                    lng=raw_data.loc[tour_indices]['Longitude'],
+                    plot=plot,
+                    color=colors[0]
+                    )
+
+    # Reveal on browser
+    show_map(plot)
+    """

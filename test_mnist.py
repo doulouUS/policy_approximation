@@ -15,13 +15,15 @@ import read_data_fedex as rdf
 
 import math
 import tensorflow as tf
+import numpy as np
+import scipy
 
 FLAGS = None
 
 # Load data
-NUM_CLASSES = 16077 # 46521
+NUM_CLASSES = 37 # 16077 # 46521
 ENTRIES_FEAT = NUM_CLASSES  #  input are of the same shape as output
-
+dropout = 0.75
 
 # ----------------------------------------------------------------------
 #
@@ -48,7 +50,7 @@ def variable_summaries(var):
 # ----------------------------------------------------------------------
 
 
-def inference(entries, hidden_unit):
+def inference(entries, hidden_unit, hidden_unit2, hidden_unit3):
     """
     Build the graph for inference only.
     :param entries, placeholder from inputs
@@ -56,27 +58,56 @@ def inference(entries, hidden_unit):
     :return: softmax_linear, output logits
     """
     # TODO: after modifying placeholder_inputs, assemble indices, values and shape into a sparse matrix HERE
+    keep_prob = tf.placeholder(tf.float32)
     with tf.name_scope('hidden'):
-        weights = tf.Variable(
+        weights1 = tf.Variable(
             tf.truncated_normal([ENTRIES_FEAT, hidden_unit],
                                 stddev=1.0 / math.sqrt(float(ENTRIES_FEAT))),
             name='weights')
-        variable_summaries(weights)
-        biases = tf.Variable(tf.zeros([hidden_unit]),
-                             name='biases'
+        variable_summaries(weights1)
+        biases1 = tf.Variable(tf.zeros([hidden_unit]),
+                              name='biases'
+                              )
+
+        hidden1 = tf.nn.relu(tf.matmul(entries, weights1) + biases1)
+        hidden1 = tf.nn.dropout(hidden1, dropout)
+    # TODO 2) implement matmul with sparse matrix (sparse weights for instance)?
+    with tf.name_scope('hidden2'):
+        weights2 = tf.Variable(
+            tf.truncated_normal([hidden_unit, NUM_CLASSES],  # WARNING this has to change when you add or drop layers !
+                                stddev=1.0 / math.sqrt(float(hidden_unit))),
+            name='weights2')
+        biases2 = tf.Variable(tf.zeros([NUM_CLASSES]),
+                             name='biases2'
                              )
 
-        hidden = tf.nn.relu(tf.matmul(entries, weights) + biases)
-    # TODO 2) implement matmul with sparse matrix (sparse weights for instance)?
-    with tf.name_scope('softmax_linear'):
-        weights = tf.Variable(
-            tf.truncated_normal([hidden_unit, NUM_CLASSES],
+        # hidden2 = tf.nn.relu(tf.matmul(hidden1, weights2) + biases2)
+        # hidden2 = tf.nn.dropout(hidden2, dropout)
+
+    """
+    with tf.name_scope('hidden3'):
+        weights3 = tf.Variable(
+            tf.truncated_normal([hidden_unit2, hidden_unit3],
                                 stddev=1.0 / math.sqrt(float(hidden_unit))),
-            name='weights')
-        biases = tf.Variable(tf.zeros([NUM_CLASSES]),
-                             name='biases'
-                             )
-        logits = tf.matmul(hidden, weights) + biases
+            name='weights3')
+
+        biases3 = tf.Variable(tf.zeros([hidden_unit3]),
+                              name='biases3'
+                              )
+        hidden3 = tf.nn.relu(tf.matmul(hidden2, weights3) + biases3)
+        hidden3 = tf.nn.dropout(hidden3, dropout)
+
+    with tf.name_scope('hidden3'):
+        weights4 = tf.Variable(
+            tf.truncated_normal([hidden_unit3, NUM_CLASSES],
+                                stddev=1.0 / math.sqrt(float(hidden_unit))),
+            name='weights4')
+
+        biases4 = tf.Variable(tf.zeros([NUM_CLASSES]),
+                              name='biases4'
+                              )
+    """
+    logits = tf.add(tf.matmul(hidden1, weights2), biases2,  name="predictions")
 
     return logits
 
@@ -145,8 +176,9 @@ def evaluation(logits, labels):
     # the examples where the label is in the top k (here k=1)
     # of all logits for that example.
     correct = tf.nn.in_top_k(logits, labels, 1)
+    correct_among_k = tf.nn.in_top_k(logits, labels, 3)
     # Return the number of true entries.
-    return tf.reduce_sum(tf.cast(correct, tf.int32))
+    return tf.reduce_sum(tf.cast(correct, tf.int32)), tf.reduce_sum(tf.cast(correct_among_k ,tf.int32))
 
 # ----------------------------------------------------------------------
 #
@@ -174,10 +206,6 @@ def placeholder_inputs(batch_size):
                                              shape=(batch_size, NUM_CLASSES),
                                              name='input-entries'
                                              )
-
-        indices_placeholder = tf.placeholder(tf.int64)
-        values_placeholder = tf.placeholder(tf.float32)
-        shape_placeholder = tf.placeholder(tf.int32)
 
         labels_placeholder = tf.placeholder(tf.int32, shape=(batch_size), name="y-input")
     return entries_placeholder, labels_placeholder
@@ -215,6 +243,7 @@ def fill_feed_dict(data_set, entries_pl, labels_pl):
 
 def do_eval(sess,
             eval_correct,
+            eval_correct_among_k,
             entries_placeholder,
             labels_placeholder,
             data_set
@@ -223,6 +252,7 @@ def do_eval(sess,
     Args:
     sess: The session in which the model has been trained.
     eval_correct: The Tensor that returns the number of correct predictions.
+    eval_correct_among_k: Tensor that returns the number of correct pred among the 3 most probable pred
     entries_placeholder: The entries placeholder.
     labels_placeholder: The labels placeholder.
     data_set: The set of entries and labels to evaluate, from
@@ -230,27 +260,41 @@ def do_eval(sess,
     """
     # And run one epoch of eval.
     true_count = 0  # Counts the number of correct predictions.
-    steps_per_epoch = 30  # data_set.num_examples // FLAGS.batch_size
+    true_count_among_k = 0
+    steps_per_epoch = data_set.num_examples // FLAGS.batch_size
     num_examples = steps_per_epoch * FLAGS.batch_size
     for step in range(steps_per_epoch):
         feed_dict = fill_feed_dict(data_set,
                                    entries_placeholder,
                                    labels_placeholder
                                    )
-        true_count += sess.run(eval_correct, feed_dict=feed_dict)
+        true_count_, true_count_among_k_ = sess.run([eval_correct, eval_correct_among_k], feed_dict=feed_dict)
+        true_count += true_count_
+        true_count_among_k += true_count_among_k_
+
     precision = float(true_count) / num_examples
+    precision_among_k = float(true_count_among_k) / num_examples
     print('  Num examples: %d  Num correct: %d  Precision @ 1: %0.04f' %
           (num_examples, true_count, precision))
+    print('  Num examples: %d  Num correct (among 3): %d  Precision @ 1: %0.04f' %
+          (num_examples, true_count_among_k, precision_among_k))
 
 
 def run_training():
     """Train MNIST for a number of steps."""
+    """
+    # ORIGINAL 16 077 CLASS PROBLEM
     # Get the sets of entries and labels for training and Test
     whole_data = rdf.ReadDataFedex()
     percentage_training = 0.7
     num_examples = whole_data.num_examples
 
-    # Train and test data
+    # Train and test data + SHUFFLING
+    arr = np.arange(whole_data.entries.shape[0])
+    np.random.shuffle(arr)
+    whole_data.entries = whole_data.entries[arr, :]
+    whole_data.labels = whole_data.labels[arr]
+
     train_entries = whole_data.entries[:math.floor(percentage_training*num_examples)]
     train_labels = whole_data.labels[:math.floor(percentage_training*num_examples)]
 
@@ -259,6 +303,35 @@ def run_training():
 
     data_set_train = rdf.Dataset(train_entries, train_labels)
     data_set_test = rdf.Dataset(test_entries, test_labels)
+    """
+    # Get the sets of entries and labels for training and Test
+    whole_data = rdf.data_prep_2nd_attempt()
+    percentage = 0.7
+    # input
+    indices = np.asarray(whole_data[1])
+    rows = indices[:, 0]
+    columns = indices[:, 1]
+    input_data = np.asarray(scipy.sparse.coo_matrix((whole_data[0], (rows, columns))).todense())
+    # shuffling
+    # nb_samples = input_data.shape[0]
+    # arr = np.arange(nb_samples)
+    # np.random.shuffle(arr)
+
+    # input_data = input_data[arr, :]
+
+    # labels
+    label_data = np.asarray(whole_data[3])[:, 1]
+    # label_data = label_data[arr, 1]
+
+    train_entries = input_data[:math.floor(percentage * input_data.shape[0]), :]
+    train_labels = label_data[:math.floor(percentage * input_data.shape[0])]
+
+    test_entries = input_data[math.floor(percentage * input_data.shape[0]):, :]
+    test_labels = label_data[math.floor(percentage * input_data.shape[0]):]
+
+    data_set_train = rdf.Dataset(train_entries, train_labels)
+    data_set_test = rdf.Dataset(test_entries, test_labels)
+
 
     # Tell TensorFlow that the model will be built into the default Graph.
 
@@ -270,7 +343,9 @@ def run_training():
 
         # Build a Graph that computes predictions from the inference model.
         logits = inference(entries_placeholder,
-                           FLAGS.hidden
+                           FLAGS.hidden,
+                           FLAGS.hidden2,
+                           FLAGS.hidden3
                            )
 
         # Add to the Graph the Ops for loss calculation.
@@ -280,7 +355,7 @@ def run_training():
         train_op = training(loss_, FLAGS.learning_rate)
 
         # Add the Op to compare the logits to the labels during evaluation.
-        eval_correct = evaluation(logits, labels_placeholder)
+        eval_correct, eval_correct_among_k = evaluation(logits, labels_placeholder)
 
         # Build the summary Tensor based on the TF collection of Summaries.
         summary = tf.summary.merge_all()
@@ -329,7 +404,7 @@ def run_training():
             duration = time.time() - start_time
 
             # Write the summaries and print an overview fairly often.
-            full_test = [1000, 5000]
+            full_test = [1000, 5000, 10000, 20000]
             if step % 100 == 0 and step not in full_test:
                 # Print status to stdout.
                 print('-- Step %d: loss = %.2f (%.3f sec)' % (step, loss_value, duration))
@@ -358,6 +433,7 @@ def run_training():
                 print('Training Data Eval:')
                 do_eval(sess,
                         eval_correct,
+                        eval_correct_among_k,
                         entries_placeholder,
                         labels_placeholder,
                         data_set_train)
@@ -367,6 +443,7 @@ def run_training():
                 print('Test Data Eval:')
                 do_eval(sess,
                         eval_correct,
+                        eval_correct_among_k,
                         entries_placeholder,
                         labels_placeholder,
                         data_set_test
@@ -405,7 +482,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max_steps',
         type=int,
-        default=1001,
+        default=60001,
         help='Number of steps to run trainer.'
     )
 
@@ -416,6 +493,23 @@ if __name__ == '__main__':
         type=int,
         default=1000,
         help='Number of units in hidden layer 1.'
+    )
+
+    # Number of hidden units
+    # TODO nb of units is too low here
+    parser.add_argument(
+        '--hidden2',
+        type=int,
+        default=30,
+        help='Number of units in hidden layer 2.'
+    )
+    # Number of hidden units
+    # TODO nb of units is too low here
+    parser.add_argument(
+        '--hidden3',
+        type=int,
+        default=50,
+        help='Number of units in hidden layer 2.'
     )
 
     # Batch size
@@ -445,7 +539,7 @@ if __name__ == '__main__':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='/Users/Louis/PycharmProjects/policy_approximation/logs/log_adam_30_btch',
+            default='/Users/Louis/PycharmProjects/policy_approximation/logs/log_adam_30_btch_reduced',
             help='Directory to put the log data.'
         )
 
@@ -453,7 +547,7 @@ if __name__ == '__main__':
         parser.add_argument(
             '--log_dir',
             type=str,
-            default='home/Research/policy_approximation/logs/log_adam_30_btch',
+            default='home/Research/policy_approximation/logs/log_adam_30_btch_reduced',
             help='Directory to put the log data.'
         )
     FLAGS, unparsed = parser.parse_known_args()

@@ -7,43 +7,85 @@ import time
 
 import read_data_fedex as rdf
 
-# TODO The kernel trick!
-# TODO RBF too!
+# training param
+percentage = 0.7
 
 # Get the sets of entries and labels for training and Test
-whole_data = rdf.ReadDataFedex()
-percentage_training = 0.01
-num_examples = whole_data.num_examples
+whole_data = rdf.data_prep_2nd_attempt()
+
+# input
+indices = np.asarray(whole_data[1])
+rows = indices[:, 0]
+columns = indices[:, 1]
+input_data = np.asarray(scipy.sparse.coo_matrix((whole_data[0], (rows, columns))).todense())
+
+# shuffling
+nb_samples = input_data.shape[0]
+arr = np.arange(nb_samples)
+np.random.shuffle(arr)
+
+input_data = input_data[arr, :]
+# labels
+label_data = np.asarray(whole_data[3])
+label_data = label_data[arr, 1]
+# print("labelsLLLLLLL ", label_data)
+
+print("-------")
+print("Dataset summary ")
+print("shape of entries ", input_data.shape)
+print("shape of labels", label_data.shape)
+print('#######')
 
 # Train and test data
-train_entries = scipy.sparse.csr_matrix(whole_data.entries[:math.floor(percentage_training*num_examples)], dtype=np.float64)
-train_labels = scipy.sparse.csr_matrix(whole_data.labels[:math.floor(percentage_training*num_examples)], dtype=np.float64)
-
+train_entries = input_data[:math.floor(percentage*input_data.shape[0]), :]
+train_labels = label_data[:math.floor(percentage*input_data.shape[0])]
+print("Training set ")
 print("Shape of training data : ", train_entries.shape)
+print("Shape of labels        :", train_labels.shape)
 
-test_entries = scipy.sparse.csr_matrix(whole_data.entries[
-               math.floor(percentage_training*num_examples):math.floor(percentage_training*num_examples)+100
-               ], dtype=np.float64)
-test_labels = scipy.sparse.csr_matrix(whole_data.labels[
-              math.floor(percentage_training * num_examples):math.floor(percentage_training*num_examples)+100
-              ], dtype=np.float64)
+test_entries = input_data[math.floor(percentage*input_data.shape[0]):, :]
+test_labels = label_data[math.floor(percentage*input_data.shape[0]):]
+print("Shape of test data : ", test_entries.shape)
+print("Shape of test labels        :", test_labels.shape)
 
 # data_set_train = rdf.Dataset(train_entries, train_labels)
 # data_set_test = rdf.Dataset(test_entries, test_labels)
 
 # SVM model
-C = 1.
 start_time = time.time()
-svc = svm.NuSVC(nu=0.01, cache_size=1000).fit(train_entries, train_labels)
+svc = svm.NuSVC(
+    nu=0.01,
+    kernel='rbf',
+    decision_function_shape=None,
+    cache_size=1000,
+    tol=8e-5,
+    probability=False
+).fit(train_entries, train_labels)
 end_time = time.time()
 print("Training time: ", end_time - start_time)
 # print("Test with first test entry  : ", data_set_train.entries[0])
 # print("label is  : ", data_set_train.labels[0])
+
 pred = svc.predict(test_entries)
-# print("Predicted  : ", pred)
+
+# pred_prob = svc.predict_proba(test_entries)
+# idx_sorted = np.argsort(pred_prob)
+
+
+# Accuracy
 errors = pred - test_labels
-print("Accuracy on test set: ", np.count_nonzero(errors==0))
-print("With total number of entries ", 100)
+
+"""
+# Accuracy on 3 best predicted classes
+count = 0
+for i in range(0, idx_sorted.shape[0]):
+    print(idx_sorted[i, 0:3])
+    print(test_labels[i])
+    if test_labels[i] in idx_sorted[i, 0:3]:
+        count+=1
+"""
+print("Accuracy on test set: ", np.count_nonzero(errors==0)/test_labels.shape[0])
 
 
-# (pred.shape[0] - np.count_nonzero(errors==0))/pred.shape[0])
+# Best score obtained after moving various parameter: 29% with rbf, tol=8e-5 and nu = 0.01
+
