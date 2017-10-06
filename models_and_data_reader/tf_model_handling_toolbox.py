@@ -1,12 +1,12 @@
-import os, argparse
+import argparse
+import math
+import os
 
+import numpy as np
 import tensorflow as tf
 from tensorflow.python.framework import graph_util
-from read_data_fedex import ReadDataFedex, Dataset
-import math
-import numpy as np
 
-from sparse_naive import evaluation
+from models_and_data_reader.read_data_fedex import ReadDataFedex, Dataset
 
 dir = os.path.dirname(os.path.realpath(__file__))  # /Users/Louis/PycharmProjects/policy_approximation
 

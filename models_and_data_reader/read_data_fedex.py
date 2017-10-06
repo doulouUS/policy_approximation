@@ -3,20 +3,24 @@ import numpy as np
 import pickle
 import itertools
 import time
-import sys
+# import sys
+
 from scipy.sparse.coo import coo_matrix
-from matplotlib import pyplot
-import matplotlib as mpl
+# from matplotlib import pyplot
+# import matplotlib as mpl
+import matplotlib.pyplot as plt
+
 # Mapping
 from bokeh.io import output_file, show
 from bokeh.models import (
-  GMapPlot, GMapOptions, ColumnDataSource, Circle, DataRange1d, PanTool, WheelZoomTool, BoxSelectTool, Line
+  GMapPlot, GMapOptions, ColumnDataSource, Circle, DataRange1d, PanTool, WheelZoomTool, BoxSelectTool, Line, LabelSet
 )
-from bokeh.palettes import inferno
+from datetime import datetime, timedelta
+# from bokeh.palettes import inferno
 
-import tensorflow as tf
-from tensorflow.python.framework import graph_util
-from scipy.spatial.distance import pdist
+# import tensorflow as tf
+# from tensorflow.python.framework import graph_util
+# from scipy.spatial.distance import pdist
 
 # Homemade modules
 import sys
@@ -109,7 +113,6 @@ class Datasets:
         self.labels = np.asarray(columns_l, dtype=np.uint16)  # sparse_labels.todense(), dtype=np.int8)
         print("Shape of the written labels ", self.labels.shape)
         self.num_examples = dense_shape[0]
-
 
         # Follow training with these params
         self.epochs_completed = 0
@@ -264,7 +267,6 @@ class Datasets:
                         values_label.extend([1])
                         array_line += 1
                         # print("LABEL ", next_loc)
-
 
         if column == "address":
             dense_shape = [indices[-1][0]+1, self.nb_addresses]
@@ -461,11 +463,13 @@ def initialize_map(title="Singapore", lat=1.29, lng=103.8, maptype="roadmap", zo
     return plot
 
 
-def add_point_on_map(lat, lng, plot, color="blue"):
+def add_point_on_map(lat, lng, plot, label, color="blue"):
     """
     Plot lat and long
     :param lat: list of float
     :param lng: list of float, same size as lat
+    :param plot: GMapPlot object, from initialize_map function
+    :param str, label
     :return:
     """
     if len(lat) != len(lng):
@@ -475,35 +479,49 @@ def add_point_on_map(lat, lng, plot, color="blue"):
         data=dict(
             lat=lat,
             lon=lng,
+            label=[label]
         )
     )
+    #
     circle = Circle(x="lon", y="lat", size=8, fill_color=color, fill_alpha=0.8, line_color=None)
     plot.add_glyph(source, circle)
 
+    # Label
+    labels = LabelSet(x='lat', y='lon', level='glyph', text='label',
+                      x_offset=5, y_offset=5, source=source, render_mode='canvas')
+    plot.add_layout(labels)
 
-def add_line_on_map(lat, lng, plot, color="black"):
+
+def add_line_on_map(lat, lng, plot, label, color="black"):
     """
     Plot lat and long
     :param lat: list of float
     :param lng: list of float, same size as lat
+    :param plot: GMapPlot object, from initialize_map function
+    :param label: list of str, label the line
+
     :return:
     """
+    # TODO add label to line
     if len(lat) != len(lng):
         raise ValueError('latitude and longitude lists should be of same size.')
 
     source = ColumnDataSource(
         data=dict(
             lat=lat,
-            lon=lng,
+            lon=lng
         )
     )
+    # Glyph
     line = Line(x="lon", y="lat", line_color=color)
     plot.add_glyph(source, line)
+
 
 
 def show_map(plot):
     """
     Show map with widgets, possible to generate html
+    :param plot: GMapPlot object, from initialize_map function
     :return:
     """
     # Add widgets
@@ -511,9 +529,16 @@ def show_map(plot):
     # output_file("gmap_plot.html")
     show(plot)
 
+def basic_settings(nb_truck=5):
+    """
+    Extract data of interest from the bulk of FedEx data
 
-def data_prep_2nd_attempt():
-
+    :param nb_truck: int, nb of trucks to use as a source of data, taking the most numerous
+    :return: data, pd dataframe: contains all the info we're interested in
+    :return: data_indices, list of int: indices to find the data in the whole dataset
+    :return: sorted_truck, list of int: IDs of FedEx trucks sorted by number of tasks
+    :return: idx_to_pc, pc_to_idx: dicts, for having a unique reference for each postal code
+    """
     raw_data = pd.read_csv(
         PATH_TO_DATA,
         header=0,
@@ -534,6 +559,88 @@ def data_prep_2nd_attempt():
     # 37 postal codes
     # 11 tours
 
+    #
+    # Ranking of trucks having the most jobs before 12pm
+    trucks_id = np.asarray(list(set(raw_data["FedExID"])))
+
+    nb_loc = []
+    for truck in trucks_id:
+        # df1.loc[lambda df: df.A > 0, :]
+        truck_nb_cust = raw_data[raw_data["FedExID"] == truck]
+        add = len(truck_nb_cust[truck_nb_cust["StopStartTime"] < 1200]["PostalCode"])
+        nb_loc.append(int(add))
+
+    idx_truck = np.argsort(-np.asarray(nb_loc))
+    sorted_truck = trucks_id[idx_truck]
+    # 147888 5034428  826678  792262 5029354  774331 5015037  976220
+    # 305366 5007991  861864 5034416 5025403  214484 5025441  775391  938771
+    # 912979  297524  735762 5022223  868386 5002569  986246  826444 5057185
+    # 909334  363777  955144  218158  940061  363851  955141  244089 5081861
+    # 982516  436132  955131  151454  968292  616349  814086  767395  299173
+
+    # TODO: select only <12pm jobs + more data !
+    data = raw_data.loc[raw_data["FedExID"].isin(sorted_truck[0:nb_truck])]
+    # Further selection
+    # data = raw_data[raw_data["FedExID"] == 868386]
+    # data = data[data["Latitude"] < 1.31216860]
+    # data = data[data["Longitude"] > 103.78200827]
+    # data = data[data["Longitude"] < 103.8705063913]
+    data = data[data["StopStartTime"] < 1200]
+    data_indices = list(data.index)
+    print("length ", len(data_indices))
+
+    # postal code encoding
+    idx_to_pc = sorted(list(set(data["PostalCode"])))
+    pc_to_idx = {j: i for i, j in enumerate(idx_to_pc)}
+
+    # TODO identify scenario used for the simulator: by truck, day
+    # Truck 5029354, first day 1/12/2015
+    # truck_id = sorted_truck[4]
+    data_scenario = data[data["FedExID"] == 5029354]
+
+    # select different days
+    # day_scenario = list(set(data_scenario["StopDate"]))[0]
+    day_scenario = data_scenario["StopDate"].iloc[0]
+
+    print(" ----- SCENARIO LOADED ----- ")
+    print("Truck considered         : ", 5029354)  # truck_id)
+    print("Days to choose from      : ", set(data_scenario["StopDate"]))
+    print("Day re-created           : ", day_scenario)
+    print(" ")
+    # print("day chosen for the simulator: ", day_scenario)
+    data_scenario = data_scenario[data_scenario["StopDate"] == day_scenario]
+    print("Number of locations used for training, L=", len(idx_to_pc))
+
+    return data, data_indices, data_scenario, sorted_truck, idx_to_pc, pc_to_idx
+
+
+def data_prep_2nd_attempt(
+                          nb_truck=5,
+                          method="classification",
+                          deliv_reward = 1,
+                          pickup_reward = 0.5):
+    """
+
+    :param idx_to_be_removed: list of int, correspond to the indices used to build the scenario in the simulator
+    (optional)
+    :param nb_truck: int, nb of trucks to consider among the ones having the most jobs
+    :param method: str, "classification" or "regression"
+    :param deliv_reward: float
+    :param pickup_reward: float
+    :return:
+    """
+
+    # retrieve basic data
+    data_init, data_indices, data_scenario, sorted_truck, idx_to_pc, pc_to_idx = basic_settings(nb_truck=nb_truck)
+    print("Before filtering shape ", data_init.shape)
+
+    # TODO BIG PROBLEM: by filtering just this day of operation for one specific truck, we remove the number of labels
+    # in the training samples. Thus, we have to include in our training even the scenario used in the simulator...
+    # This is because we lack data: we need more samples per location (here one job/location almost...)
+    # Filter data from data_scenario
+    # data = data_init.ix[list(set(data_init.index) - set(data_scenario.index))]
+    data = data_init
+
     # Data to be built
     indices = []
     values = []
@@ -542,30 +649,28 @@ def data_prep_2nd_attempt():
     indices_label = []
     values_label = []
 
-    data = raw_data[raw_data["FedExID"] == 868386]
-    data = data[data["Latitude"] < 1.31216860]
-    data = data[data["Longitude"] > 103.78200827]
-    data = data[data["Longitude"] < 103.8705063913]
-    data_indices = list(data.index)
-
-    # postal code encoding
-    idx_to_pc = sorted(list(set(data["PostalCode"])))
-    pc_to_idx = {j: i for i, j in enumerate(idx_to_pc)}
-
     # Find tours index
+    start_tour_index = []
     end_tour_index = []
+
+    start_tour_index.append(data_indices[0])
     for i, j in zip(data_indices, range(0, len(data_indices)-1)):
         if data_indices[j+1] - i-1 > 10:
+            start_tour_index.append(data_indices[j + 1])
             end_tour_index.append(i)
     end_tour_index.append(data_indices[-1])
 
     # retrieve for each entry, known jobs remaining to be done at the time of the entry in the current tour
     for index, row in data.iterrows():
         if index not in end_tour_index:
-            # current end tour index
-            tour = min(filter(lambda x: x > index, end_tour_index))
+
+            # current start and end tour index
+            tour_end = min(filter(lambda x: x > index, end_tour_index))
+            tour_start = max(filter(lambda x: x <= index, start_tour_index))
+
+            ## Gathering the state
             # remaining jobs in the tour
-            data_indices_tour = [i for i in data.index if index < i < tour+1]
+            data_indices_tour = [i for i in data.index if index < i <= tour_end]
 
             # remaining deliv
             rem = data.loc[data_indices_tour]
@@ -578,6 +683,13 @@ def data_prep_2nd_attempt():
             # current location
             cur_loc = row["PostalCode"]
 
+            # current time encoded as nb of seconds between 12pm and now/nb seconds between 12pm and 12am
+            total_nb_seconds = timedelta(hours=12, minutes=0)
+            cur_time = datetime.strptime(str(int(row["StopStartTime"])), '%H%M').time()  # time object
+            cur_time = timedelta(hours=cur_time.hour, minutes=cur_time.minute)  # nb of seconds from 12am
+            # TODO this can further be noramlized as most values will be >0 (>6am)
+            cur_time = 2*cur_time.seconds / total_nb_seconds.seconds - 1  # normalized time in [-1,1]
+
             # decision (next row)
             next_loc = data.loc[data_indices_tour[0]]
             next_loc = next_loc["PostalCode"]
@@ -589,36 +701,114 @@ def data_prep_2nd_attempt():
             next_loc = pc_to_idx[next_loc]
 
             # build sparse elements
+            # TODO be cautious that there is one element of your input vector that is the current time
             # indices
-            indices.extend([[shape_count, i] for i in rem_deliv])
-            indices.extend([[shape_count, i] for i in rem_pick])
-            indices.extend([[shape_count, cur_loc]])
+            indices.extend([[shape_count, i + 1] for i in rem_deliv])
+            indices.extend([[shape_count, i + 1] for i in rem_pick])
+            indices.extend([[shape_count, 0]])
+            indices.extend([[shape_count, cur_loc + 1]])
+
 
             values.extend([0.5]*len(rem_deliv))
             values.extend([-0.5]*len(rem_pick))
+            values.extend([cur_time])
             values.extend([1])
 
-            # labels
-            indices_label.extend([[shape_count, next_loc]])
-            values_label.extend([1])
+            # So that the tour's first locations appears in the dataset as labels
+            if index in start_tour_index:
+                # First location of a tour: add the depot as
+                indices.extend([[shape_count+1, i + 1] for i in rem_deliv])
+                indices.extend([[shape_count+1, i + 1] for i in rem_pick])
+                indices.extend([[shape_count+1, 0]])
+                indices.extend([[shape_count+1, cur_loc + 1]])
 
-            shape_count += 1
+                values.extend([0.5] * len(rem_deliv))
+                values.extend([-0.5] * len(rem_pick))
+                values.extend([0.3])  # departure time less than 8am
+                values.extend([0.5])  # second way to differentiate this entry as the first of the tour
 
-    shape = [shape_count, len(set(data["PostalCode"]))]
-    print(shape)
-    return values, indices, values_label, indices_label, shape
+
+            if method == "classification":
+                # labels
+                indices_label.extend([[shape_count, next_loc]])
+                values_label.extend([1])
+
+                if index in start_tour_index:
+                    indices_label.extend([[shape_count+1, cur_loc]])
+                    values_label.extend([1])
+
+                    shape_count += 2
+
+                else:
+                    shape_count += 1
+
+            if method == "regression":
+                # label
+                # jobs done so far in the tour
+                job_done_indices = [i for i in data.index if tour_start <= i <= index]
+
+                # nb of deliv done
+                done = data.loc[job_done_indices]
+                done_deliv = len(list(done[done["ReadyTimePickup"] == 0000]["PostalCode"]))
+
+                # nb of pickup done
+                done_pick = len(list(done[done["ReadyTimePickup"] != 0000]["PostalCode"]))
+
+                # total score
+                score = done_deliv * deliv_reward + done_pick * pickup_reward
+
+                # add label
+                values_label.extend([score])
+
+                shape_count += 1
+
+    shape = [shape_count, len(idx_to_pc) + 1]  # + 1 because there is the time dimension !
+    print("Shape of the data", shape)
+    if method == "classification":
+        return  values, indices, values_label, indices_label, shape
+    elif method == "regression":
+        return values, indices, values_label, shape
 
 
 if __name__ == "__main__":
+    # values, indices, values_label, shape = data_prep_2nd_attempt(method="regression")
+    # print("values", len(values_label))
 
-    raw_data = pd.read_csv(
-        PATH_TO_DATA,
-        header=0,
-        delim_whitespace=True
-    )
-
+    basic_settings()
+    # data_prep_2nd_attempt()
 
     """
+    data_filtered, _, _, _, _, _ = data_prep_2nd_attempt(nb_truck=15)
+
+    locations = list(set(list(data_filtered["PostalCode"])))
+    data_filtered = data_filtered[data_filtered["ReadyTimePickup"] != 0]
+
+    print("shape ", data_filtered.shape)
+    print("count ", data_filtered[data_filtered["PostalCode"] == 456715]["ReadyTimePickup"])
+    pickup_arrival_time = {
+        location: list(data_filtered[data_filtered["PostalCode"] == location]["ReadyTimePickup"])
+        for location in locations
+        }
+
+    print(pickup_arrival_time.items())
+
+    index = []
+    data = []
+    for key, val in pickup_arrival_time.items():
+        # plot only locations where we have more info
+        if len(val) > 10:
+            index.append(key)
+            data.append(val)
+
+    fig, ax = plt.subplots(ncols=1)
+    ax.boxplot(data)
+    ax.set_xticklabels(index)
+    # ax2.violinplot(data)
+    # ax2.set_xticks(range(1, len(index) + 1))
+    # ax2.set_xticklabels(index)
+
+    plt.show()
+
     values, indices, values_label, indices_label, shape = data_prep_2nd_attempt()
     indices = np.asarray(indices)
     rows = indices[:, 0]
@@ -629,7 +819,7 @@ if __name__ == "__main__":
 
     # represent extract
     # image = np.reshape(dense_data[0,:], (69,233))
-    """
+
 
     data = ReadDataFedex()
     data = Dataset(data.entries, data.labels)
@@ -655,7 +845,7 @@ if __name__ == "__main__":
     pyplot.show()
 
 
-    """
+
     # Data of interest
     raw_data = pd.read_csv(
         PATH_TO_DATA,

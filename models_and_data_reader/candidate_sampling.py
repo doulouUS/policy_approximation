@@ -5,16 +5,13 @@ from __future__ import division
 from __future__ import print_function
 
 import argparse
+import math
 import sys
 import time
-import sys
-import os.path
 
-# Data
-import read_data_fedex as rdf
-
-import math
 import tensorflow as tf
+
+from models_and_data_reader import read_data_fedex as rdf
 
 FLAGS = None
 
