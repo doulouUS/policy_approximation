@@ -563,20 +563,39 @@ def basic_settings(nb_truck=5):
     # Ranking of trucks having the most jobs before 12pm
     trucks_id = np.asarray(list(set(raw_data["FedExID"])))
 
-    nb_loc = []
+    nb_loc = []   # nb of pickup for the truck
+    day_ass = []  # will store the day where there was the most pickup for the truck
+    nb_pickup = 0
+    day_most = 0
     for truck in trucks_id:
         # df1.loc[lambda df: df.A > 0, :]
         truck_nb_cust = raw_data[raw_data["FedExID"] == truck]
-        add = len(truck_nb_cust[truck_nb_cust["StopStartTime"] < 1200]["PostalCode"])
-        nb_loc.append(int(add))
+        truck_nb_cust = truck_nb_cust[truck_nb_cust["StopStartTime"] < 1200]
+
+        days = list(set(truck_nb_cust["StopDate"]))
+        for day in days:
+            truck_div = truck_nb_cust[truck_nb_cust["StopDate"] == day]
+            add = len(list(truck_div[truck_div["ReadyTimePickup"] != 0]["PostalCode"]))
+            if nb_pickup < add:
+                nb_pickup = add
+                day_most = day
+
+        nb_loc.append(int(nb_pickup))
+        day_ass.append(day_most)
+        nb_pickup = 0
+        day_most = 0
 
     idx_truck = np.argsort(-np.asarray(nb_loc))
     sorted_truck = trucks_id[idx_truck]
-    # 147888 5034428  826678  792262 5029354  774331 5015037  976220
-    # 305366 5007991  861864 5034416 5025403  214484 5025441  775391  938771
-    # 912979  297524  735762 5022223  868386 5002569  986246  826444 5057185
-    # 909334  363777  955144  218158  940061  363851  955141  244089 5081861
-    # 982516  436132  955131  151454  968292  616349  814086  767395  299173
+    day_ass = np.asarray(day_ass)[idx_truck]
+
+    print("nb_loc ", nb_loc)
+    # print("day most ", day_ass)
+    # print("sorted_truck ", sorted_truck)
+
+    print("nb pickup ", sorted_truck[idx_truck[0]])
+    # print("nb pickup ", nb_loc[5])
+
 
     # TODO: select only <12pm jobs + more data !
     data = raw_data.loc[raw_data["FedExID"].isin(sorted_truck[0:nb_truck])]
@@ -587,7 +606,7 @@ def basic_settings(nb_truck=5):
     # data = data[data["Longitude"] < 103.8705063913]
     data = data[data["StopStartTime"] < 1200]
     data_indices = list(data.index)
-    print("length ", len(data_indices))
+    # print("length ", len(data_indices))
 
     # postal code encoding
     idx_to_pc = sorted(list(set(data["PostalCode"])))
@@ -595,15 +614,15 @@ def basic_settings(nb_truck=5):
 
     # TODO identify scenario used for the simulator: by truck, day
     # Truck 5029354, first day 1/12/2015
-    # truck_id = sorted_truck[4]
-    data_scenario = data[data["FedExID"] == 5029354]
+    truck_id = sorted_truck[1]
+    data_scenario = data[data["FedExID"] == truck_id]
 
     # select different days
     # day_scenario = list(set(data_scenario["StopDate"]))[0]
-    day_scenario = data_scenario["StopDate"].iloc[0]
+    day_scenario = day_ass[1]  # list(set(data_scenario["StopDate"]))[0]
 
     print(" ----- SCENARIO LOADED ----- ")
-    print("Truck considered         : ", 5029354)  # truck_id)
+    print("Truck considered         : ", truck_id)  # truck_id)
     print("Days to choose from      : ", set(data_scenario["StopDate"]))
     print("Day re-created           : ", day_scenario)
     print(" ")

@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import datetime
+from datetime import tzinfo
 import math
 from math import radians, sin, cos, asin, sqrt
 import pandas as pd
@@ -12,6 +13,11 @@ from models_and_data_reader.read_data_fedex import initialize_map, add_line_on_m
 from models_and_data_reader.svm_classification import train_svm_model
 
 from collections import defaultdict
+import matplotlib.pyplot as plt
+import matplotlib
+
+# API call Google
+import requests
 
 PATH_TO_DATA = "/Users/Louis/PycharmProjects/policy_approximation/DATA/fedex_pc_cleaned_no_0.data"
 # Loading file in memory to speed up reading
@@ -20,7 +26,20 @@ PC_COORD = pd.read_csv("/Users/Louis/PycharmProjects/policy_approximation/DATA/"
                        sep=",")
 STATS = pd.read_csv("/Users/Louis/PycharmProjects/policy_approximation/simulator/traveltime_stats.txt", sep=" ")
 # --------
+class GMT8(tzinfo):
+    """
+    Implement the tzinfo object specific to Singapore time zone
+    """
+    def utcoffset(self, dt):
+        return datetime.timedelta(hours=8, minutes=0)
 
+    def tzname(self, dt):
+        return "GMT +8"
+
+    def dst(self, dt):
+        return datetime.timedelta(0)
+
+gmt8 = GMT8()
 
 def haversine(lat1, lon1, lat2, lon2):
     """
@@ -79,42 +98,83 @@ def filter_lower_datetime(time, list_time):
     """
     return [t for t in list_time if t <= time]
 
-def get_travel_time(pc1, pc2, time, rand=False):
+def get_travel_time(pc1, pc2, time, rand=False, mode="ggAPI"):
     # TODO: implement the random part if needed
-    # TODO: possible to replace this by API calls to Google Maps in real time (so day-long code running)
+    # TODO: possible to replace this by API calls to Google Maps in real time
     """
     Travel time retriever, used in the simulator
     :param pc1: int, postal code of departure
     :param pc2: int, postal code of arrival
     :param time: datetime.datetime object, time at departure
     :param rand: bool, if True, travel time is sampled from a normal distribution
+    :param mode: str, ggAPI or simple.
     :return: tuple, datetime.timdelta object, time needed to travel from pc1 to pc2 leaving at time + distance
     """
-    # Retrieve distance between pc1 and pc2
-    # #pc -> coord (read data)
-    closest1 = get_coordinates(pc1)
-    closest2 = get_coordinates(pc2)
+    if mode == "simple":
+        # Retrieve distance between pc1 and pc2
+        # #pc -> coord (read data)
+        closest1 = get_coordinates(pc1)
+        closest2 = get_coordinates(pc2)
 
-    # print("closest to", pc1, " is ", closest1)
-    # print("closest to ", pc2, " is ", closest2)
+        # print("closest to", pc1, " is ", closest1)
+        # print("closest to ", pc2, " is ", closest2)
 
-    # #coords -> distance (haversine)
-    dist = haversine(closest1[0], closest1[1], closest2[0], closest2[1])
+        # #coords -> distance (haversine)
+        dist = haversine(closest1[0], closest1[1], closest2[0], closest2[1])
 
-    # Load the appropriate statistics
-    times = [datetime.datetime.strptime(str(time), '%H%M').replace(year=1970,
-                                                                   month=1,
-                                                                   day=1,
-                                                                   tzinfo=None)
-             for time in list(STATS["DAYTIME"][1:])]  # avoid the 0-line
-    idx_nearest_time = times.index(nearest(times, time))
-    # print(idx_nearest_time)
-    poly_coeff = list(STATS[["C","B","A"]].iloc[idx_nearest_time+1])  # correction of +1 to avoid the 0-line...
-    # print("COEF", poly_coeff)
+        # Load the appropriate statistics
+        times = [datetime.datetime.strptime(str(t), '%H%M').replace(year=1970,
+                                                                    month=1,
+                                                                    day=1,
+                                                                    tzinfo=gmt8)
+                 for t in list(STATS["DAYTIME"][1:])]  # avoid the 0-line
+        idx_nearest_time = times.index(nearest(times, time))
+        # print(idx_nearest_time)
+        poly_coeff = list(STATS[["C","B","A"]].iloc[idx_nearest_time+1])  # correction of +1 to avoid the 0-line...
+        # print("COEF", poly_coeff)
 
-    # apply the model -> retrieve mean and std (optional) ADDED 10 mn of service, this model is way too optimistic !
-    return datetime.timedelta(seconds=poly.polyval(dist, poly_coeff)+10*60), dist
+        # apply the model -> retrieve mean and std (optional) ADDED 10 mn of service, this model is way too optimistic !
+        return datetime.timedelta(seconds=poly.polyval(dist, poly_coeff)+10*60), dist
 # --------
+    elif mode == "ggAPI":
+        # coords
+        # #pc -> coord (read data)
+        closest1 = get_coordinates(pc1)
+        closest2 = get_coordinates(pc2)
+
+        # retrieve UTC time in seconds since 1970-1-1
+        cur_time = datetime.datetime.now(tz=gmt8)
+        time_traffic = time.replace(year=cur_time.year, month=cur_time.month, day=cur_time.day+1, tzinfo=gmt8)
+        # +1 to avoid past call to Google API
+
+        # api call
+        url = "https://maps.googleapis.com/maps/api/directions/json?"
+        params = {"origin": str(closest1[0])+','+str(closest1[1]),
+                  "destination":str(closest2[0])+','+str(closest2[1]),
+                  "key": "AIzaSyApMtNEiMXlpRju4TR8my3lK_0tG-VafPU",
+                  "units":"metrics",
+                  "departure_time":str(int(time_traffic.timestamp() // 1)),
+                  "region":"sg",
+                  "traffic_model":"best_guess"
+                  }
+        api_call = requests.get(
+            url,
+            params=params
+        ).json()
+
+        if api_call["status"] == 'INVALID_REQUEST':
+            raise ValueError('Invalid Google Maps API request: '+api_call["error_message"])
+
+        # duration and distance retrieval (seconds and meters)
+        duration = api_call["routes"][0]["legs"][0]["duration"]["value"]
+        dist = api_call["routes"][0]["legs"][0]["distance"]["value"]
+
+        return datetime.timedelta(seconds=duration + 5*60), dist
+
+
+
+    else:
+        raise ValueError('Incorrect mode :'+mode+'. Choose between "simple" and "ggAPI".')
 
 
 class State:
@@ -179,9 +239,22 @@ class PerfTracker:
         self.total_waiting_periods = 0
 
         # average time between two deliveries/pickups OR average deliv/pickups per hour
-        elapsed_time = self.simulator.state.t_k - self.simulator.departure_time
         self.average_deliv_h = []
         self.average_pickup_h = []
+
+        # historical events
+        # list of times
+        self.hist_t_k = [datetime.datetime.strptime(str(int(row["StopStartTime"])), '%H%M').replace(
+                        year=1970,
+                        month=1,
+                        day=1,
+                        tzinfo=gmt8)
+            for idx, row in self.simulator.data_scenario.iterrows()]
+
+        print("SET PC", set(simulator.data_scenario["PostalCode"]))
+
+        # nb of jobs done
+        self.done_hist_jobs = range(1, len(self.hist_t_k)+1)
 
     def __repr__(self):
         output_string = "-----TRACKER SUMMARY------\n" \
@@ -206,7 +279,7 @@ class PerfTracker:
         self.nb_served_jobs_k.append(len(simulator.served_deliv_pc) + len(simulator.served_pickup_pc))
 
         # value of the objective function at each step
-        self.obj_func_k.append(len(simulator.served_deliv_pc)*0.5 + len(simulator.served_pickup_pc)*1)
+        self.obj_func_k.append(len(simulator.served_deliv_pc)*1 + len(simulator.served_pickup_pc)*0.5)
 
         # total distance since start
         self.total_distance.append(self.total_distance[-1] + distance)
@@ -222,6 +295,49 @@ class PerfTracker:
 
         # average time between two deliveries
 
+    def plot_summary(self, suptitle="Mention Policy Here"):
+        # Map
+        # show_map(plot=plot)
+
+        # Curves to visualize results
+        dates = matplotlib.dates.date2num(self.time_t_k)
+        dates_hist = matplotlib.dates.date2num(self.hist_t_k)
+
+        # HISTOGRAM
+        figure = plt.figure()
+        figure.suptitle(suptitle)
+        axes = [figure.add_subplot(2, 2, i) for i in range(1, 5)]
+
+        # Ticker and x-axis formatter
+        hour_tick = matplotlib.dates.HourLocator()
+        hour_formatter = matplotlib.dates.DateFormatter("%H")
+        # First nb of known jobs + nb of served jobs
+        axes[0].plot_date(dates, self.total_nb_known_jobs_k, fillstyle="full", markeredgewidth=0.0)
+        axes[0].plot_date(dates, self.nb_served_jobs_k, fillstyle="full", markeredgewidth=0.0)
+        # historical data
+        axes[0].plot_date(dates_hist, self.done_hist_jobs, fillstyle="full", markeredgewidth=0.0)
+
+        axes[0].xaxis.set_major_locator(hour_tick)
+        axes[0].xaxis.set_major_formatter(hour_formatter)
+        axes[0].set_title("Number of jobs done and nb of total available jobs")
+        # axes[0].set_fillstyle('bottom')
+
+        axes[1].plot_date(x=dates, y=self.total_distance, linestyle='solid',markeredgewidth=0.0)
+        axes[1].xaxis.set_major_locator(hour_tick)
+        axes[1].xaxis.set_major_formatter(hour_formatter)
+        axes[1].set_title("total distance vs time")
+
+        axes[2].plot_date(x=dates, y=self.obj_func_k, linestyle='solid',markeredgewidth=0.0)
+        axes[2].xaxis.set_major_locator(hour_tick)
+        axes[2].xaxis.set_major_formatter(hour_formatter)
+        axes[2].set_title("objective function vs time")
+
+        axes[3].plot_date(x=dates[1:], y=self.average_deliv_h, linestyle='solid')
+        axes[3].xaxis.set_major_locator(hour_tick)
+        axes[3].xaxis.set_major_formatter(hour_formatter)
+        axes[3].set_title("average deliv rate (per hour)")
+
+        return figure, axes
 class Simulator:
     """
     Simulator
@@ -234,13 +350,15 @@ class Simulator:
             inputs: action, state
             outputs: next state
     """
-    def __init__(self, scenario_mode="random", nb_truck=15, nb_deliv_jobs=10, nb_pickup_jobs=10, seed=10):
+    def __init__(self, scenario_mode="random", policy="computer_driver_heuristic", nb_truck=15,
+                 nb_deliv_jobs=10, nb_pickup_jobs=10, seed=10):
 
+        self.policy = policy
         self.nb_deliv_jobs = nb_deliv_jobs
         self.nb_pickup_jobs = nb_pickup_jobs
 
-        self.departure_location = 119114
-        self.departure_coord = [1.2805405, 103.7863179]
+        self.departure_location = 498746
+        self.departure_coord = [1.313832, 103.8262954]
 
         # BASE SETTINGS
         if scenario_mode == "random":
@@ -252,21 +370,19 @@ class Simulator:
             # pickup location candidates
             data = self.data[self.data["ReadyTimePickup"] != 0]  # work on pickup data only
             pickup_candidates = [int(pc) for pc in self.idx_to_pc if len(data[data["PostalCode"] == pc]) > 0]
+            random.seed(seed)
 
             # selection of pickups
             self.pc_pickup_jobs = random.sample(pickup_candidates, nb_pickup_jobs)
 
             # delivery jobs among remaining locations (arrangement)
             # selection of deliveries
-            random.seed(seed)
             self.pc_deliv_jobs = random.sample(set(self.idx_to_pc) - set(self.pc_pickup_jobs), nb_deliv_jobs)
 
         elif scenario_mode == "realistic":
             self.data, _, self.data_scenario, _, self.idx_to_pc, self.pc_to_idx \
                 = base_data(nb_truck=nb_truck)
 
-            print("SELF.IDX_TO_PC 414 ", self.idx_to_pc[414])
-            print("SELF.IDX_TO_PC 415 ", self.idx_to_pc[415])
             # SCENARION GENERATOR
             # deliveries locations: set as once visited it is served
             self.pc_deliv_jobs = \
@@ -300,7 +416,7 @@ class Simulator:
         if scenario_mode == "random":
             pickup_arrival_time_mean, pickup_arrival_time_var = self.get_ready_time()
             self.pickup_loc_to_time = {
-                location: datetime.datetime(
+                location: [datetime.datetime(
                     year=1970,
                     month=1,
                     day=1,
@@ -308,12 +424,12 @@ class Simulator:
                     minute=0,
                     second=0,
                     microsecond=0,
-                    tzinfo=None)
+                    tzinfo=gmt8)
                     +
                     datetime.timedelta(seconds=math.floor(random.gauss(
                         pickup_arrival_time_mean[int(location)],
                         pickup_arrival_time_var[int(location)]))
-                    )
+                    )]
                 for location in self.pc_pickup_jobs
             }
         elif scenario_mode == "realistic":
@@ -326,7 +442,7 @@ class Simulator:
                         year=1970,
                         month=1,
                         day=1,
-                        tzinfo=None)
+                        tzinfo=gmt8)
                 )
 
         else:
@@ -347,25 +463,27 @@ class Simulator:
                                              month=1,
                                              day=1,
                                              hour=8,
-                                             minute=0)
+                                             minute=0,
+                                                tzinfo=gmt8)
 
         # Initialize state by filtering unknown deliveries at departure time
         # TODO Solve this question of the departure location ! For now, 1 chosen among the deliveries
-        self.state = State(initial_location=self.pc_deliv_jobs[0],  # self.departure_location,
+        self.state = State(initial_location=self.departure_location,  # self.departure_location,
                            initial_time=self.departure_time,
                            P_0=[self.pickup_time_to_loc[t]
                                 for t in filter_lower_datetime(self.departure_time,
                                                                [item for sublist in self.pickup_loc_to_time.values()
                                                                 for item in sublist])
                                 ],
-                           D_0=self.pc_deliv_jobs[1:]
+                           D_0=self.pc_deliv_jobs
                            )
         # Perf tracker
         self.tracker = PerfTracker(self)
 
         # Policies
         # Train and retrieve the model
-        self.heuristic_model = train_svm_model(nb_truck=nb_truck,method="classification", percentage=1)
+        if self.policy == "computer_driver_heuristic":
+            self.heuristic_model = train_svm_model(nb_truck=nb_truck,method="classification", percentage=1)
 
 
     def get_ready_time(self):
@@ -381,7 +499,7 @@ class Simulator:
                 (datetime.datetime.strptime(str(int(row["ReadyTimePickup"])), '%H%M').replace(year=1970,
                                                                                               month=1,
                                                                                               day=1,
-                                                                                              tzinfo=None)
+                                                                                              tzinfo=gmt8)
                  - datetime.datetime.now().replace(
                     year=1970,
                     month=1,
@@ -390,7 +508,7 @@ class Simulator:
                     minute=0,
                     second=0,
                     microsecond=0,
-                    tzinfo=None)
+                    tzinfo=gmt8)
                  ).total_seconds()
                 for _, row in data_pickup[data_pickup["PostalCode"] == location].iterrows()
                 ]
@@ -429,25 +547,21 @@ class Simulator:
         elif decision in list(self.state.P_k.keys()):
             # remove
             del self.state.P_k[decision]
-            self.served_pickup_pc.append(decision)
+            self.served_pickup_pc.append(int(decision))
 
-            # update by looking at the pre-loaded scenario in self.pickup_loc_to_time, not already served
-            new_jobs = [job for job, t in self.pickup_loc_to_time.items() if min(t) < self.state.t_k
-                        and (len(t) > self.served_pickup_pc.count(job) or job not in self.served_pickup_pc)]
-            for new_job in new_jobs:
-                new_job_coord = get_coordinates(new_job)
-                self.state.P_k[new_job] = new_job_coord
-
-        elif decision == 0:  # wait case, no removing, just updating
-            new_jobs = [job for job, t in self.pickup_loc_to_time.items() if min(t) < self.state.t_k
-                        and (len(t) > self.served_pickup_pc.count(job) or job not in self.served_pickup_pc)]
-            for new_job in new_jobs:
-                new_job_coord = get_coordinates(new_job)
-                self.state.P_k[new_job] = new_job_coord
+        elif decision == 0:  # wait case, no removing, so we go the update part directly
+            pass
 
         else:
             raise ValueError('Error in simulator\'s method update_remaining_jobs: ' \
                              'decision is not in self.state.D_k or self.state.P_k keys')
+
+        # update by looking at the pre-loaded scenario in self.pickup_loc_to_time, not already served
+        new_jobs = [job for job, t in self.pickup_loc_to_time.items() if min(t) < self.state.t_k
+                    and (len(t) > self.served_pickup_pc.count(job) or job not in self.served_pickup_pc)]
+        for new_job in new_jobs:
+            new_job_coord = get_coordinates(new_job)
+            self.state.P_k[new_job] = new_job_coord
 
     def display_scenario(self):
         print("Scenario:")
@@ -503,56 +617,61 @@ class Simulator:
     def computer_driver_heuristic(self, pc):
         """
         Return the decision (postal code) of our trained heuristic among self.state.D_k or self.state.P_k
+
+        /!\ SPECIAL CASE WHEN AT THE DEPOT : pc == 498746
         :param: pc, int: postal code of the current location
         :return: int, postal code. 0 if no more jobs
         """
-        # encode state: State -> Generalized One hot vector
-        # print(len(self.idx_to_pc)+1)
-        encoded_vector = np.zeros(len(self.idx_to_pc)+1)
-
-        # indices of locations FOR ENCODING
-        pickup_jobs_idx = [self.pc_to_idx[p]+1 for p in list(self.state.P_k.keys())]  # +1 is to make room for the time dim
-        deliv_jobs_idx = [self.pc_to_idx[p]+1 for p in list(self.state.D_k.keys())]
-
-        # indices of locations FOR PC READING
-        pickup_jobs_idx_read = [self.pc_to_idx[p] for p in list(self.state.P_k.keys())]
-        deliv_jobs_idx_read = [self.pc_to_idx[p] for p in list(self.state.D_k.keys())]
-        tasks = set(pickup_jobs_idx_read + deliv_jobs_idx_read)
-
-        if len(tasks) > 0:
-            # set appropriate values at the index corresponding to the location
-            encoded_vector[pickup_jobs_idx] = -0.5
-            encoded_vector[deliv_jobs_idx] = 0.5
-            encoded_vector[self.pc_to_idx[pc]+1] = 1
-
-            # # current time encoded as nb of seconds between 12pm and now/nb seconds between 12pm and 12am
-            total_nb_seconds = datetime.timedelta(hours=12, minutes=0)
-            cur_time = self.state.t_k.time()
-            cur_time = datetime.timedelta(hours=cur_time.hour, minutes=cur_time.minute)  # nb of seconds from 12am
-            # # TODO this can further be noramlized as most values will be >0 (>6am)
-            cur_time = 2 * cur_time.seconds / total_nb_seconds.seconds - 1  # normalized time in [-1,1]
-            encoded_vector[0] = cur_time
-
-            # predict decision
-            pred = self.heuristic_model.predict_proba(encoded_vector.reshape(1,-1))
-
-            # take the most probable location among the remaining jobs
-            # # set proba to 0 if location not among remaining jobs
-            # print("##############")
-            # print("shape of pred ", pred.shape)
-            # print("Number of locations considered  : ", len(self.idx_to_pc))
-            print("Possible indices to choose from : ", tasks)
-            pred[0, list(set(range(0, len(self.idx_to_pc))) - set(pickup_jobs_idx_read + deliv_jobs_idx_read))] = 0
-
-            idx_opt = np.argsort(pred[0,:])[-1]  # most probable location (by its index) among remaining jobs
-            print("Index chosen                     : ", idx_opt )
-            return self.idx_to_pc[idx_opt]
-
-        elif len(tasks) == 0:
-            return 0
-
+        if pc == self.departure_location:
+            return self.nearest_neigbor(pc)
         else:
-            raise ValueError('Problem with tasks, which is negative.')
+            # encode state: State -> Generalized One hot vector
+            # print(len(self.idx_to_pc)+1)
+            encoded_vector = np.zeros(len(self.idx_to_pc)+1)
+
+            # indices of locations FOR ENCODING
+            pickup_jobs_idx = [self.pc_to_idx[p]+1 for p in list(self.state.P_k.keys())]  # +1 is to make room for the time dim
+            deliv_jobs_idx = [self.pc_to_idx[p]+1 for p in list(self.state.D_k.keys())]
+
+            # indices of locations FOR PC READING
+            pickup_jobs_idx_read = [self.pc_to_idx[p] for p in list(self.state.P_k.keys())]
+            deliv_jobs_idx_read = [self.pc_to_idx[p] for p in list(self.state.D_k.keys())]
+            tasks = set(pickup_jobs_idx_read + deliv_jobs_idx_read)
+
+            if len(tasks) > 0:
+                # set appropriate values at the index corresponding to the location
+                encoded_vector[pickup_jobs_idx] = -0.5
+                encoded_vector[deliv_jobs_idx] = 0.5
+                encoded_vector[self.pc_to_idx[pc]+1] = 1
+
+                # # current time encoded as nb of seconds between 12pm and now/nb seconds between 12pm and 12am
+                total_nb_seconds = datetime.timedelta(hours=12, minutes=0)
+                cur_time = self.state.t_k.time()
+                cur_time = datetime.timedelta(hours=cur_time.hour, minutes=cur_time.minute)  # nb of seconds from 12am
+                # # TODO this can further be noramlized as most values will be >0 (>6am)
+                cur_time = 2 * cur_time.seconds / total_nb_seconds.seconds - 1  # normalized time in [-1,1]
+                encoded_vector[0] = cur_time
+
+                # predict decision
+                pred = self.heuristic_model.predict_proba(encoded_vector.reshape(1,-1))
+
+                # take the most probable location among the remaining jobs
+                # # set proba to 0 if location not among remaining jobs
+                # print("##############")
+                # print("shape of pred ", pred.shape)
+                # print("Number of locations considered  : ", len(self.idx_to_pc))
+                print("Possible indices to choose from : ", tasks)
+                pred[0, list(set(range(0, len(self.idx_to_pc))) - set(pickup_jobs_idx_read + deliv_jobs_idx_read))] = 0
+
+                idx_opt = np.argsort(pred[0,:])[-1]  # most probable location (by its index) among remaining jobs
+                print("Index chosen                     : ", idx_opt )
+                return self.idx_to_pc[idx_opt]
+
+            elif len(tasks) == 0:
+                return 0
+
+            else:
+                raise ValueError('Problem with tasks, which has negative length...')
 
     def next_state(self, decision):
         # TODO Static?
@@ -565,7 +684,7 @@ class Simulator:
             # Current index
             self.state.k += 1
             # current time
-            delta_time, distance = get_travel_time(self.state.c_k, decision, self.state.t_k)
+            delta_time, distance = get_travel_time(self.state.c_k, decision, self.state.t_k, mode="ggAPI")
             self.state.t_k += delta_time
 
             # current location
@@ -589,7 +708,7 @@ class Simulator:
 
             return 2*60, 0
 
-    def run_simulator(self, noon_deadline, policy="nearest_neighbor", plot=initialize_map()):
+    def run_simulator(self, noon_deadline, plot=initialize_map()):
 
         sim.display_scenario()
 
@@ -601,9 +720,9 @@ class Simulator:
             print("-----------------------------")
             # print decision
             print("** DECISION ** ")
-            if policy == "nearest_neighbor":
+            if self.policy == "nearest_neighbor":
                 decision = self.nearest_neigbor(sim.state.c_k)
-            elif policy == "computer_driver_heuristic":
+            elif self.policy == "computer_driver_heuristic":
                 decision = self.computer_driver_heuristic(sim.state.c_k)
             else:
                 raise ValueError('In Simulator\'s run_simulator, wrong policy name: %s' % policy)
@@ -628,33 +747,40 @@ class Simulator:
 
 if __name__ == '__main__':
         # TODO add a location (1, 1, ..., 1) in order to include the first locations in the labels
+
+        # get_travel_time(119114, 120100, time=datetime.datetime.now(),mode="ggAPI")
+        policy = "nearest_neighbor"  # "nearest_neighbor" or "computer_driver_heuristic"
         # Simulator
-        sim = Simulator(scenario_mode="realistic", nb_truck=5)
+        sim = Simulator(scenario_mode="realistic", policy=policy, nb_truck=5)
         noon_deadline = datetime.datetime(year=1970,
                                           month=1,
                                           day=1,
                                           hour=12,
                                           minute=0,
                                           second=0,
-                                        microsecond=0)
+                                        microsecond=0,
+                                          tzinfo=gmt8)
 
         # decision = sim.computer_driver_heuristic(list(sim.state.D_k.keys())[0])
         # print("Decision made by the computer :" , decision)
 
         # Run
-        plot, tracker = sim.run_simulator(noon_deadline=noon_deadline,
-                                 policy="nearest_neighbor")
+        plot, tracker = sim.run_simulator(noon_deadline=noon_deadline)  # or "computer_driver_heuristic"
 
         # Tracker info
         print(tracker)
+        print(" ")
+        print("List of visited deliveries, chronologically   : ", sim.served_deliv_pc)
+        print("List of visited pickups, chronologically      : ", sim.served_pickup_pc)
 
-        # Map
-        show_map(plot=plot)
+        # Plot tracker summary
+        fig, ax = tracker.plot_summary(suptitle=policy)
 
-        # TODO: insert one of the scenario used to train the computer heuristic
-        # TODO: try to improve the travel time function
+        plt.show()
 
-        # LATER...
         # TODO improve coordinates of our postal codes
-        # TODO improve travel time function
-        # Present info
+
+        # TODO evaluate performance of our SVM when filtering the results to allow only known jobs. ok
+        # TODO Draw on map the order number on top of the lines
+        # TODO if one postal code present twice or more (for deliveries): increase service time
+
