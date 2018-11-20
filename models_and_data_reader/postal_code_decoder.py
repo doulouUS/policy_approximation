@@ -8,7 +8,7 @@ PATH_TO_DATA = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/dyn
 PATH_TO_ADDRESSES = "/Users/Louis/PycharmProjects/MEng_Research/foo-Environment_2/gym_foo/envs/addresses.fedex"
 
 # API Google
-API_key = "AIzaSyD43dQWWhc8lfg5ybgqK__nEpSU5zFmnyI"
+API_key = "-----------------------------------------------"
 url = "https://maps.googleapis.com/maps/api/geocode/json?"
 
 
